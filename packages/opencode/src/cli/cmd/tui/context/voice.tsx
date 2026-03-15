@@ -125,7 +125,18 @@ export function VoiceProvider(props: {
 
     newBridge.on("transcript", (text: string, isFinal: boolean) => {
       vlog("VoiceCtx", `Transcript (final=${isFinal}): ${text}`)
-      setLastTranscript(text)
+      const trimmed = text.trim()
+      if (isFinal) {
+        setLastTranscript(trimmed)
+        return
+      }
+
+      // Suppress noisy micro-partials (single letters / fragments).
+      // Keep overlay stable and rely on finals for correctness.
+      if (trimmed.length <= 2) return
+      if (trimmed.length < 5 && !trimmed.includes(" ")) return
+
+      setLastTranscript(trimmed)
     })
 
     newBridge.start().catch((err: unknown) => {

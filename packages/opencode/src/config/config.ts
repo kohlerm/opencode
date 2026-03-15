@@ -1234,28 +1234,28 @@ export namespace Config {
               model: z.enum(["zipformer", "whisper-base", "parakeet-tdt"]).default("zipformer"),
               language: z.string().default("en"),
             })
-            .default(() => ({})),
+            .default(() => ({ model: "zipformer", language: "en" })),
           tts: z
             .object({
               model: z.enum(["kokoro-en", "kokoro-multi", "piper-lessac", "piper-amy"]).default("kokoro-en"),
               voice: z.string().optional(),
               speed: z.number().default(1.0),
             })
-            .default(() => ({})),
+            .default(() => ({ model: "kokoro-en", speed: 1.0 })),
           vad: z
             .object({
               threshold: z.number().default(0.5),
               minSilenceDuration: z.number().default(0.5),
               minSpeechDuration: z.number().default(0.25),
             })
-            .default(() => ({})),
+            .default(() => ({ threshold: 0.5, minSilenceDuration: 0.5, minSpeechDuration: 0.25 })),
           permissions: z
             .object({
               voiceConfirm: z.boolean().default(true),
               autoApprove: z.array(z.string()).default(["read", "glob"]),
               requireConfirm: z.array(z.string()).default(["write", "edit", "bash"]),
             })
-            .default(() => ({})),
+            .default(() => ({ voiceConfirm: true, autoApprove: ["read", "glob"], requireConfirm: ["write", "edit", "bash"] })),
           ui: z
             .object({
               overlayPosition: z.enum(["top", "bottom"]).default("bottom"),
@@ -1263,7 +1263,7 @@ export namespace Config {
               showTranscript: z.boolean().default(true),
               transcriptTimeout: z.number().default(3000),
             })
-            .default(() => ({})),
+            .default(() => ({ overlayPosition: "bottom", showWaveform: true, showTranscript: true, transcriptTimeout: 3000 })),
         })
         .optional(),
     })

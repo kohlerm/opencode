@@ -1234,14 +1234,14 @@ export namespace Config {
               model: z.enum(["zipformer", "whisper-base", "parakeet-tdt"]).default("zipformer"),
               language: z.string().default("en"),
             })
-            .default(() => ({ model: "zipformer", language: "en" })),
+            .default(() => ({ model: "zipformer" as const, language: "en" })),
           tts: z
             .object({
               model: z.enum(["kokoro-en", "kokoro-multi", "piper-lessac", "piper-amy"]).default("kokoro-en"),
               voice: z.string().optional(),
               speed: z.number().default(1.0),
             })
-            .default(() => ({ model: "kokoro-en", speed: 1.0 })),
+            .default(() => ({ model: "kokoro-en" as const, speed: 1.0 })),
           vad: z
             .object({
               threshold: z.number().default(0.5),
@@ -1263,7 +1263,7 @@ export namespace Config {
               showTranscript: z.boolean().default(true),
               transcriptTimeout: z.number().default(3000),
             })
-            .default(() => ({ overlayPosition: "bottom", showWaveform: true, showTranscript: true, transcriptTimeout: 3000 })),
+            .default(() => ({ overlayPosition: "bottom" as const, showWaveform: true, showTranscript: true, transcriptTimeout: 3000 })),
         })
         .optional(),
     })

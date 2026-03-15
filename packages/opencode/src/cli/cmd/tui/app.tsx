@@ -21,7 +21,7 @@ import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command
 import { DialogAgent } from "@tui/component/dialog-agent"
 import { DialogSessionList } from "@tui/component/dialog-session-list"
 import { DialogWorkspaceList } from "@tui/component/dialog-workspace-list"
-import { KeybindProvider } from "@tui/context/keybind"
+import { KeybindProvider, useKeybind } from "@tui/context/keybind"
 import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
 import { Session } from "@tui/routes/session"
@@ -212,6 +212,7 @@ function App() {
   const local = useLocal()
   const kv = useKV()
   const command = useCommandDialog()
+  const keybind = useKeybind()
   const sdk = useSDK()
   const toast = useToast()
   const { theme, mode, setMode } = useTheme()
@@ -219,6 +220,14 @@ function App() {
   const exit = useExit()
   const promptRef = usePromptRef()
   const voice = useVoice()
+
+  // Global voice toggle so it works on both Home and Session routes.
+  useKeyboard((evt) => {
+    if (!keybind.match("voice_toggle", evt)) return
+    voice.setEnabled(!voice.isEnabled())
+    evt.preventDefault()
+    evt.stopPropagation()
+  })
 
   useKeyboard((evt) => {
     if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return

@@ -1,5 +1,5 @@
 import { Prompt, type PromptRef } from "@tui/component/prompt"
-import { createEffect, createMemo, Match, on, onMount, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createSignal, Match, on, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useTheme } from "@tui/context/theme"
 import { useKeybind } from "@tui/context/keybind"
 import { Logo } from "../component/logo"
@@ -15,6 +15,7 @@ import { Installation } from "@/installation"
 import { useKV } from "../context/kv"
 import { useCommandDialog } from "../component/dialog-command"
 import { useLocal } from "../context/local"
+import { useVoice } from "../context/voice"
 
 // TODO: what is the best way to do this?
 let once = false
@@ -78,6 +79,8 @@ export function Home() {
   let prompt: PromptRef
   const args = useArgs()
   const local = useLocal()
+  const voice = useVoice()
+  const [pendingVoiceSubmit, setPendingVoiceSubmit] = createSignal<string | null>(null)
   onMount(() => {
     if (once) return
     if (route.initialPrompt) {
@@ -101,6 +104,39 @@ export function Home() {
       },
     ),
   )
+
+  // Submit queued voice input once model/session data are ready.
+  createEffect(
+    on(
+      () => ({ ready: sync.ready && local.model.ready, queued: pendingVoiceSubmit() }),
+      ({ ready, queued }) => {
+        if (!ready || !queued || !prompt) return
+        if (prompt.current?.input !== queued) return
+        prompt.submit()
+        setPendingVoiceSubmit(null)
+      },
+    ),
+  )
+
+  // Handle voice transcripts on Home route.
+  // This ensures first spoken phrase submits from Home and navigates to Session.
+  createEffect(() => {
+    const b = voice.bridge()
+    if (!b) return
+
+    const handler = (text: string) => {
+      if (!prompt) return
+      prompt.set({ input: text, parts: [] })
+      if (sync.ready && local.model.ready) {
+        prompt.submit()
+      } else {
+        setPendingVoiceSubmit(text)
+      }
+    }
+
+    b.on("transcriptFinal", handler)
+    onCleanup(() => b.off("transcriptFinal", handler))
+  })
   const directory = useDirectory()
 
   const keybind = useKeybind()

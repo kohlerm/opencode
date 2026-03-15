@@ -333,14 +333,6 @@ export function Session() {
   })
 
   useKeyboard((evt) => {
-    // Handle voice toggle first (works in any session)
-    if (keybind.match("voice_toggle", evt)) {
-      voice.setEnabled(!voice.isEnabled())
-      evt.preventDefault()
-      evt.stopPropagation()
-      return
-    }
-    
     // Other shortcuts only work in child sessions
     if (!session()?.parentID) return
     if (keybind.match("app_exit", evt)) {

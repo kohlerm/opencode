@@ -278,8 +278,8 @@ export class VoiceBridge extends EventEmitter {
     this.lastTranscript = text
     this.emit("transcript", text, isFinal)
 
-    if (isFinal && this.sessionID) {
-      // Send to OpenCode via SDK
+    if (isFinal) {
+      // Send final transcript event (session may be null on Home route).
       this.sendToOpencode(text)
     }
   }

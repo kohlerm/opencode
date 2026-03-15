@@ -41,6 +41,7 @@ import { writeHeapSnapshot } from "v8"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
+import { VoiceProvider, useVoice } from "./context/voice"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -141,6 +142,7 @@ export function tui(input: {
                   <ToastProvider>
                     <RouteProvider>
                       <TuiConfigProvider config={input.config}>
+                        <VoiceProvider>
                         <SDKProvider
                           url={input.url}
                           directory={input.directory}
@@ -170,6 +172,7 @@ export function tui(input: {
                             </ThemeProvider>
                           </SyncProvider>
                         </SDKProvider>
+                        </VoiceProvider>
                       </TuiConfigProvider>
                     </RouteProvider>
                   </ToastProvider>
@@ -214,6 +217,7 @@ function App() {
   const sync = useSync()
   const exit = useExit()
   const promptRef = usePromptRef()
+  const voice = useVoice()
 
   useKeyboard((evt) => {
     if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
@@ -562,6 +566,15 @@ function App() {
         dialog.clear()
       },
       category: "System",
+    },
+    {
+      title: "Toggle voice mode",
+      value: "voice.toggle",
+      keybind: "voice_toggle",
+      category: "Voice",
+      onSelect: () => {
+        voice.setEnabled(!voice.isEnabled())
+      },
     },
     {
       title: "Help",

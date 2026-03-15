@@ -7,6 +7,7 @@ import {
   For,
   Match,
   on,
+  onCleanup,
   onMount,
   Show,
   Switch,
@@ -51,6 +52,8 @@ import { useSDK } from "@tui/context/sdk"
 import { useCommandDialog } from "@tui/component/dialog-command"
 import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
+import { useVoice } from "../../context/voice"
+import { VoiceOverlay } from "../../component/voice-overlay"
 import { Header } from "./header"
 import { parsePatch } from "diff"
 import { useDialog } from "../../ui/dialog"
@@ -236,6 +239,69 @@ export function Session() {
   const keybind = useKeybind()
   const dialog = useDialog()
   const renderer = useRenderer()
+  const voice = useVoice()
+
+  // Wire LLM text deltas to voice TTS when voice mode is enabled
+  sdk.event.on("message.part.delta" as any, (evt: any) => {
+    if (!voice.isEnabled() || !voice.isConnected()) return
+    if (evt.properties.field !== "text") return
+    // Only feed text from the current session
+    const parts = sync.data.part[route.sessionID]
+    if (!parts) return
+    const b = voice.bridge()
+    if (b) {
+      b.feedLLMText(evt.properties.delta)
+    }
+  })
+
+  // Flush remaining TTS text when assistant message completes
+  sdk.event.on("message.updated" as any, (evt: any) => {
+    if (!voice.isEnabled() || !voice.isConnected()) return
+    const msg = evt.properties.info
+    if (msg.role !== "assistant") return
+    if (msg.sessionID !== route.sessionID) return
+    if (!msg.time?.completed) return
+    const b = voice.bridge()
+    if (b) {
+      b.flushLLMText()
+    }
+  })
+
+  // Handle voice transcripts — send as prompts to the current session
+  createEffect(() => {
+    const b = voice.bridge()
+    if (!b) return
+
+    const handler = (text: string, _sessionID: string | null) => {
+      if (!prompt) return
+      prompt.set({ input: text, parts: [] })
+      prompt.submit()
+    }
+
+    b.on("transcriptFinal", handler)
+    onCleanup(() => b.off("transcriptFinal", handler))
+  })
+
+  // Handle barge-in — abort the current session
+  createEffect(() => {
+    const b = voice.bridge()
+    if (!b) return
+
+    const handler = () => {
+      sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+    }
+
+    b.on("abortSession", handler)
+    onCleanup(() => b.off("abortSession", handler))
+  })
+
+  // Update bridge session ID when route changes
+  createEffect(() => {
+    const b = voice.bridge()
+    if (b) {
+      b.setSessionID(route.sessionID)
+    }
+  })
 
   // Allow exit when in child session (prompt is hidden)
   const exit = useExit()
@@ -260,6 +326,15 @@ export function Session() {
   })
 
   useKeyboard((evt) => {
+    // Handle voice toggle first (works in any session)
+    if (keybind.match("voice_toggle", evt)) {
+      voice.setEnabled(!voice.isEnabled())
+      evt.preventDefault()
+      evt.stopPropagation()
+      return
+    }
+    
+    // Other shortcuts only work in child sessions
     if (!session()?.parentID) return
     if (keybind.match("app_exit", evt)) {
       exit()
@@ -1212,6 +1287,7 @@ export function Session() {
             </Match>
           </Switch>
         </Show>
+        <VoiceOverlay />
       </box>
     </context.Provider>
   )

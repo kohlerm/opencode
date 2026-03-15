@@ -25,14 +25,14 @@ export namespace Format {
   export type Status = z.infer<typeof Status>
 
   const state = Instance.state(async () => {
-    const enabled: Record<string, boolean> = {}
+    const cache: Record<string, string[] | false> = {}
     const cfg = await Config.get()
 
     const formatters: Record<string, Formatter.Info> = {}
     if (cfg.formatter === false) {
       log.info("all formatters are disabled")
       return {
-        enabled,
+        cache,
         formatters,
       }
     }
@@ -46,43 +46,41 @@ export namespace Format {
         continue
       }
       const result: Formatter.Info = mergeDeep(formatters[name] ?? {}, {
-        command: [],
         extensions: [],
         ...item,
       })
 
-      if (result.command.length === 0) continue
-
-      result.enabled = async () => true
+      result.enabled = async () => item.command ?? false
       result.name = name
       formatters[name] = result
     }
 
     return {
-      enabled,
+      cache,
       formatters,
     }
   })
 
-  async function isEnabled(item: Formatter.Info) {
+  async function resolveCommand(item: Formatter.Info) {
     const s = await state()
-    let status = s.enabled[item.name]
-    if (status === undefined) {
-      status = await item.enabled()
-      s.enabled[item.name] = status
+    let command = s.cache[item.name]
+    if (command === undefined) {
+      log.info("resolving command", { name: item.name })
+      command = await item.enabled()
+      s.cache[item.name] = command
     }
-    return status
+    return command
   }
 
   async function getFormatter(ext: string) {
     const formatters = await state().then((x) => x.formatters)
-    const result = []
+    const result: { info: Formatter.Info; command: string[] }[] = []
     for (const item of Object.values(formatters)) {
-      log.info("checking", { name: item.name, ext })
       if (!item.extensions.includes(ext)) continue
-      if (!(await isEnabled(item))) continue
+      const command = await resolveCommand(item)
+      if (!command) continue
       log.info("enabled", { name: item.name, ext })
-      result.push(item)
+      result.push({ info: item, command })
     }
     return result
   }
@@ -91,11 +89,11 @@ export namespace Format {
     const s = await state()
     const result: Status[] = []
     for (const formatter of Object.values(s.formatters)) {
-      const enabled = await isEnabled(formatter)
+      const command = await resolveCommand(formatter)
       result.push({
         name: formatter.name,
         extensions: formatter.extensions,
-        enabled,
+        enabled: !!command,
       })
     }
     return result
@@ -108,29 +106,27 @@ export namespace Format {
       log.info("formatting", { file })
       const ext = path.extname(file)
 
-      for (const item of await getFormatter(ext)) {
-        log.info("running", { command: item.command })
+      for (const { info, command } of await getFormatter(ext)) {
+        const replaced = command.map((x) => x.replace("$FILE", file))
+        log.info("running", { replaced })
         try {
-          const proc = Process.spawn(
-            item.command.map((x) => x.replace("$FILE", file)),
-            {
-              cwd: Instance.directory,
-              env: { ...process.env, ...item.environment },
-              stdout: "ignore",
-              stderr: "ignore",
-            },
-          )
+          const proc = Process.spawn(replaced, {
+            cwd: Instance.directory,
+            env: { ...process.env, ...info.environment },
+            stdout: "ignore",
+            stderr: "ignore",
+          })
           const exit = await proc.exited
           if (exit !== 0)
             log.error("failed", {
-              command: item.command,
-              ...item.environment,
+              command,
+              ...info.environment,
             })
         } catch (error) {
           log.error("failed to format file", {
             error,
-            command: item.command,
-            ...item.environment,
+            command,
+            ...info.environment,
             file,
           })
         }

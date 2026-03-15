@@ -275,9 +275,21 @@ export function Session() {
       if (!prompt) return
 
       const normalized = text.trim().toLowerCase().replace(/[.!?]+$/, "")
-      if (normalized === "abort" || normalized === "stop" || normalized === "cancel" || normalized === "esc" || normalized === "escape") {
+      const compact = normalized.replace(/[^a-z]/g, "")
+
+      // Voice abort intent: prefer "escape" to avoid accidental short-command triggers.
+      const isEscapeIntent =
+        normalized === "escape" ||
+        normalized === "esc" ||
+        normalized === "press escape" ||
+        compact === "escape" ||
+        compact === "esc" ||
+        compact === "scape" ||
+        compact === "skape"
+
+      if (isEscapeIntent) {
         sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        toast.show({ message: "Voice abort triggered", variant: "warning", duration: 1500 })
+        toast.show({ message: "Voice escape triggered", variant: "warning", duration: 1500 })
         return
       }
 

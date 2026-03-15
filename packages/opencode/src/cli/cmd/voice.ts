@@ -33,7 +33,7 @@ export const VoiceCommand = cmd({
       }),
   handler: async (args) => {
     const action = args.action || "status"
-    const config = await Config.load()
+    const config = await Config.get()
 
     switch (action) {
       case "start":

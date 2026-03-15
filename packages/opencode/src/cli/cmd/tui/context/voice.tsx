@@ -7,7 +7,7 @@
  */
 
 import { createContext, useContext, createSignal, createEffect, onCleanup } from "solid-js"
-import type { Accessor, Setter } from "solid-js"
+import type { Accessor, Setter, JSX } from "solid-js"
 import { VoiceBridge, type VoiceState } from "../../../voice/bridge.js"
 import { vlog } from "../../../voice/vlog.js"
 
@@ -69,11 +69,24 @@ export function VoiceProvider(props: {
 
     // Build config from defaults (voice config from opencode config may not exist yet)
     const voiceConfig = {
+      enabled: true,
+      keybind: "ctrl+v",
       rcliPath: "../../rcli/build/rcli",
       socketPath: "~/.opencode/rcli-voice.sock",
       stt: { model: "zipformer" as const, language: "en" },
       tts: { model: "kokoro-en" as const, speed: 1.0 },
       vad: { threshold: 0.5, minSilenceDuration: 0.5, minSpeechDuration: 0.25 },
+      permissions: {
+        voiceConfirm: true,
+        autoApprove: ["read", "glob"],
+        requireConfirm: ["write", "edit", "bash"],
+      },
+      ui: {
+        overlayPosition: "bottom" as const,
+        showWaveform: true,
+        showTranscript: true,
+        transcriptTimeout: 3000,
+      },
     }
 
     const bridgeConfig = {

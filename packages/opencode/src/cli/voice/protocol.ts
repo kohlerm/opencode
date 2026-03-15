@@ -69,6 +69,24 @@ export interface ConfigMessage {
   ttsVoice?: string
   sttModel?: string
   vadThreshold?: number
+  /** When true, OpenCode handles audio capture and VAD; RCLI only does STT */
+  clientAudioCapture?: boolean
 }
 
-export type BridgeMessage = ToggleMessage | SpeakMessage | InterruptMessage | ConfigMessage
+/**
+ * Audio data message - sent from OpenCode to RCLI when clientAudioCapture is enabled.
+ * Audio data is base64-encoded PCM16 mono at 16000 Hz.
+ */
+export interface AudioMessage {
+  type: "audio"
+  /** Base64-encoded PCM16 audio data */
+  data: string
+  /** Sample rate in Hz (typically 16000) */
+  sampleRate: number
+  /** Whether this is the final chunk of a speech segment */
+  isFinal: boolean
+  /** Timestamp in ms */
+  timestamp?: number
+}
+
+export type BridgeMessage = ToggleMessage | SpeakMessage | InterruptMessage | ConfigMessage | AudioMessage

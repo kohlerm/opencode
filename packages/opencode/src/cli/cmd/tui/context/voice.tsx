@@ -95,6 +95,9 @@ export function VoiceProvider(props: {
       serverUrl: "http://localhost:4096",
       directory: process.cwd(),
       voiceConfig,
+      // Enable client-side audio capture with WebRTC VAD
+      clientAudioCapture: true,
+      vadAggressiveness: 3,
     }
 
     const newBridge = new VoiceBridge(bridgeConfig)

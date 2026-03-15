@@ -4,13 +4,21 @@
  * Main bridge component that connects RCLI voice proxy with OpenCode.
  * Manages the RCLI process, handles socket communication, and translates
  * between protocols.
+ * 
+ * With WebRTC VAD integration, this bridge now:
+ * 1. Captures audio locally using `mic`
+ * 2. Runs WebRTC VAD for speech detection
+ * 3. Sends speech segments to RCLI for STT
  */
 
 import { EventEmitter } from "node:events"
 import { spawn, type ChildProcess } from "node:child_process"
 import { RcliSocketClient } from "./socket-client"
 import { SentenceDetector, sanitizeForTts } from "./sentence-detector"
+import { AudioCapture } from "./audio-capture"
+import { WebRtcVad } from "./webrtc-vad"
 import type { RcliMessage, BridgeMessage } from "./protocol"
+import type { SpeechSegment } from "./webrtc-vad"
 import type { Config } from "../../config/config"
 import { vlog } from "./vlog"
 
@@ -25,6 +33,10 @@ export interface VoiceBridgeConfig {
   directory: string
   /** Voice configuration */
   voiceConfig: Config.Info["voice"]
+  /** Enable client-side audio capture with WebRTC VAD (default: true) */
+  clientAudioCapture?: boolean
+  /** WebRTC VAD aggressiveness (0-3, default: 3) */
+  vadAggressiveness?: number
 }
 
 export type VoiceState = "idle" | "listening" | "processing" | "speaking" | "interrupted"
@@ -42,10 +54,15 @@ export interface VoiceBridgeEvents {
 }
 
 export class VoiceBridge extends EventEmitter {
-  private config: VoiceBridgeConfig
+  private config: Required<VoiceBridgeConfig>
   private rcliProcess: ChildProcess | null = null
   private socket: RcliSocketClient
   private sentenceDetector: SentenceDetector
+
+  // Audio capture and VAD
+  private audioCapture: AudioCapture | null = null
+  private webRtcVad: WebRtcVad | null = null
+  private isCapturing = false
 
   private state: VoiceState = "idle"
   private sessionID: string | null = null
@@ -56,15 +73,30 @@ export class VoiceBridge extends EventEmitter {
   private isSpeech = false
   private lastTranscript = ""
 
+  // Barge-in detection
+  private playbackRms = 0
+  private consecutiveSpeechFrames = 0
+  private readonly BARGE_IN_DEBOUNCE_FRAMES = 3
+  private readonly BARGE_IN_ENERGY_FLOOR = 0.02
+  private readonly BARGE_IN_ENERGY_RATIO = 2.5
+
   constructor(config: VoiceBridgeConfig) {
     super()
     vlog("Bridge", `constructor called, socketPath=${config.socketPath}`)
-    this.config = config
+    
+    // Set defaults
+    this.config = {
+      ...config,
+      clientAudioCapture: config.clientAudioCapture ?? true,
+      vadAggressiveness: config.vadAggressiveness ?? 3,
+    }
+    
     this.socket = new RcliSocketClient({
       socketPath: config.socketPath,
       reconnect: true,
       reconnectDelay: 1000,
     })
+    
     this.sentenceDetector = new SentenceDetector({
       minWords: config.voiceConfig?.tts?.speed === 1.0 ? 6 : 4,
       firstSentenceMinWords: 1,
@@ -83,6 +115,7 @@ export class VoiceBridge extends EventEmitter {
     this.socket.on("disconnect", () => {
       this.emit("disconnect")
       this.setState("idle")
+      this.stopAudioCapture()
     })
 
     this.socket.on("message", (msg: RcliMessage) => {
@@ -95,7 +128,7 @@ export class VoiceBridge extends EventEmitter {
   }
 
   /**
-   * Start the voice bridge by connecting to RCLI proxy.
+   * Start the voice bridge by connecting to RCLI proxy and initializing audio capture.
    */
   async start(): Promise<void> {
     // Expand ~ in socket path
@@ -109,9 +142,192 @@ export class VoiceBridge extends EventEmitter {
     try {
       await this.socket.connect()
       vlog("Bridge", "Connected to RCLI proxy successfully!")
+      
+      // Initialize audio capture and VAD if enabled
+      if (this.config.clientAudioCapture) {
+        await this.initAudioCapture()
+      }
     } catch (err) {
       vlog("Bridge", `Failed to connect to RCLI proxy: ${err}`)
       throw err
+    }
+  }
+
+  /**
+   * Initialize audio capture and WebRTC VAD.
+   */
+  private async initAudioCapture(): Promise<void> {
+    vlog("Bridge", "Initializing audio capture with WebRTC VAD...")
+
+    try {
+      // Create audio capture (16kHz, mono, 16-bit)
+      this.audioCapture = new AudioCapture({
+        sampleRate: 16000,
+        channels: 1,
+        bitDepth: 16,
+        debug: false,
+      })
+
+      // Create WebRTC VAD
+      this.webRtcVad = new WebRtcVad({
+        sampleRate: 16000,
+        frameDuration: 30,
+        aggressiveness: this.config.vadAggressiveness,
+        silenceThresholdMs: 500,
+        minSpeechDurationMs: 250,
+        maxSpeechDurationMs: 30000,
+      })
+
+      // Initialize VAD
+      await this.webRtcVad.init()
+
+      // Setup audio capture handlers
+      this.audioCapture.on("data", (chunk) => {
+        this.handleAudioChunk(chunk)
+      })
+
+      this.audioCapture.on("error", (err) => {
+        vlog("Bridge", `Audio capture error: ${err.message}`)
+        this.emit("error", err)
+      })
+
+      // Setup VAD handlers
+      this.webRtcVad.on("speechStart", () => {
+        this.isSpeech = true
+        this.emit("audioLevel", this.audioLevel, true)
+        vlog("Bridge", "VAD: Speech started")
+      })
+
+      this.webRtcVad.on("speechEnd", (segment: SpeechSegment) => {
+        this.isSpeech = false
+        this.emit("audioLevel", this.audioLevel, false)
+        this.handleSpeechSegment(segment)
+      })
+
+      vlog("Bridge", "Audio capture and VAD initialized successfully")
+    } catch (err) {
+      vlog("Bridge", `Failed to initialize audio capture: ${err}`)
+      throw err
+    }
+  }
+
+  private handleAudioChunk(chunk: { buffer: Buffer; sampleRate: number; samples: number; timestamp: number }): void {
+    if (!this.webRtcVad || !this.isEnabled) {
+      if (!this.webRtcVad) vlog("Bridge", "Skipping audio chunk - VAD not initialized")
+      if (!this.isEnabled) vlog("Bridge", "Skipping audio chunk - voice not enabled")
+      return
+    }
+
+    // Calculate RMS for audio level
+    let sum = 0
+    const samples = new Int16Array(chunk.buffer.buffer, chunk.buffer.byteOffset, chunk.buffer.length / 2)
+    for (let i = 0; i < samples.length; i++) {
+      const sample = samples[i] / 32768.0 // Normalize to -1.0 to 1.0
+      sum += sample * sample
+    }
+    this.audioLevel = Math.sqrt(sum / samples.length)
+
+    // Check for barge-in if speaking
+    if (this.isSpeaking) {
+      this.checkBargeIn()
+    }
+
+    // Process audio with VAD
+    this.webRtcVad.processAudio(chunk.buffer, chunk.timestamp)
+  }
+
+  /**
+   * Check for barge-in (user interrupting TTS).
+   */
+  private checkBargeIn(): void {
+    const micRms = this.audioLevel
+    const pbRms = this.playbackRms
+
+    const strongMic = micRms > this.BARGE_IN_ENERGY_FLOOR
+    const louderThanSpeaker = pbRms < 0.001 || micRms > pbRms * this.BARGE_IN_ENERGY_RATIO
+
+    if (this.isSpeech && strongMic && louderThanSpeaker) {
+      this.consecutiveSpeechFrames++
+      
+      if (this.consecutiveSpeechFrames >= this.BARGE_IN_DEBOUNCE_FRAMES) {
+        vlog("Bridge", `Barge-in detected: mic=${micRms.toFixed(4)}, pb=${pbRms.toFixed(4)}`)
+        this.handleBargeIn()
+        this.consecutiveSpeechFrames = 0
+      }
+    } else {
+      this.consecutiveSpeechFrames = 0
+    }
+  }
+
+  /**
+   * Handle detected speech segment - send to RCLI for STT.
+   */
+  private handleSpeechSegment(segment: SpeechSegment): void {
+    if (!this.isEnabled) {
+      vlog("Bridge", "Ignoring speech segment - voice not enabled")
+      return
+    }
+
+    // Allow speech segments in listening or idle state (client-side capture)
+    // Don't process if we're already processing or speaking
+    if (this.state === "processing" || this.state === "speaking") {
+      vlog("Bridge", `Ignoring speech segment - currently ${this.state}`)
+      return
+    }
+
+    vlog("Bridge", `Sending speech segment to RCLI: ${segment.durationMs}ms, ${segment.buffer.length} bytes`)
+
+    // Convert audio to base64
+    const audioBase64 = segment.buffer.toString("base64")
+
+    // Send to RCLI
+    this.send({
+      type: "audio",
+      data: audioBase64,
+      sampleRate: 16000,
+      isFinal: true,
+      timestamp: segment.startTime,
+    })
+
+    this.setState("processing")
+  }
+
+  /**
+   * Start audio capture when entering listening state.
+   */
+  private async startAudioCapture(): Promise<void> {
+    if (!this.audioCapture || !this.webRtcVad) {
+      vlog("Bridge", `Cannot start capture: audioCapture=${!!this.audioCapture}, webRtcVad=${!!this.webRtcVad}`)
+      return
+    }
+    
+    if (this.isCapturing) {
+      vlog("Bridge", "Audio capture already active, ignoring start request")
+      return
+    }
+
+    try {
+      vlog("Bridge", "Starting audio capture...")
+      await this.audioCapture.start()
+      this.isCapturing = true
+      vlog("Bridge", "Audio capture started successfully")
+    } catch (err) {
+      vlog("Bridge", `Failed to start audio capture: ${err}`)
+      this.emit("error", err instanceof Error ? err : new Error(String(err)))
+    }
+  }
+
+  /**
+   * Stop audio capture.
+   */
+  private stopAudioCapture(): void {
+    if (this.audioCapture) {
+      this.audioCapture.stop()
+      this.isCapturing = false
+      vlog("Bridge", "Audio capture stopped")
+    }
+    if (this.webRtcVad) {
+      this.webRtcVad.stop()
     }
   }
 
@@ -120,6 +336,7 @@ export class VoiceBridge extends EventEmitter {
    */
   stop(): void {
     vlog("Bridge", "stop() called")
+    this.stopAudioCapture()
     this.socket.disconnect()
     if (this.rcliProcess) {
       this.rcliProcess.kill()
@@ -136,7 +353,17 @@ export class VoiceBridge extends EventEmitter {
     this.isEnabled = enabled
     this.send({ type: "toggle", enabled })
 
-    if (!enabled) {
+    if (enabled) {
+      // Start audio capture immediately when enabled (don't wait for state change)
+      if (this.config.clientAudioCapture) {
+        vlog("Bridge", "Starting audio capture immediately (client-side capture)")
+        this.startAudioCapture()
+        // Set state to listening since we're now capturing
+        this.setState("listening")
+      }
+    } else {
+      // Stop audio capture when disabled
+      this.stopAudioCapture()
       this.setState("idle")
       this.sentenceDetector.clear()
     }
@@ -261,9 +488,12 @@ export class VoiceBridge extends EventEmitter {
         this.setState(msg.state)
         break
       case "audio_level":
-        this.audioLevel = msg.level
-        this.isSpeech = msg.isSpeech
-        this.emit("audioLevel", msg.level, msg.isSpeech)
+        // Only use RCLI audio levels if not using client audio capture
+        if (!this.config.clientAudioCapture) {
+          this.audioLevel = msg.level
+          this.isSpeech = msg.isSpeech
+          this.emit("audioLevel", msg.level, msg.isSpeech)
+        }
         break
       case "barge_in":
         this.handleBargeIn()
@@ -281,6 +511,11 @@ export class VoiceBridge extends EventEmitter {
     if (isFinal) {
       // Send final transcript event (session may be null on Home route).
       this.sendToOpencode(text)
+      
+      // After final transcript, go back to listening state
+      if (this.isEnabled) {
+        this.setState("listening")
+      }
     }
   }
 
@@ -328,6 +563,19 @@ export class VoiceBridge extends EventEmitter {
       this.state = state
       this.emit("stateChange", state)
 
+      // When entering listening state, start audio capture
+      if (state === "listening" && this.config.clientAudioCapture && this.isEnabled) {
+        this.startAudioCapture()
+      }
+
+      // When leaving listening state, stop audio capture
+      if (state !== "listening" && this.config.clientAudioCapture) {
+        if (this.audioCapture?.isActive()) {
+          this.audioCapture.stop()
+          this.isCapturing = false
+        }
+      }
+
       // When speaking finishes, process next in queue
       if (state !== "speaking") {
         this.isSpeaking = false
@@ -350,6 +598,7 @@ export class VoiceBridge extends EventEmitter {
       ttsVoice: this.config.voiceConfig?.tts?.voice,
       sttModel: this.config.voiceConfig?.stt?.model,
       vadThreshold: this.config.voiceConfig?.vad?.threshold,
+      clientAudioCapture: this.config.clientAudioCapture,
     }
     this.send(config)
   }

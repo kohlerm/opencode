@@ -137,7 +137,8 @@
     "xdg-basedir": "5.1.0",
     "yargs": "18.0.0",
     "zod": "catalog:",
-    "zod-to-json-schema": "3.24.5"
+    "zod-to-json-schema": "3.24.5",
+    "mic": "2.1.2"
   },
   "overrides": {
     "drizzle-orm": "1.0.0-beta.16-ea816b6"

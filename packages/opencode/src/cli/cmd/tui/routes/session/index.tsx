@@ -273,6 +273,14 @@ export function Session() {
 
     const handler = (text: string, _sessionID: string | null) => {
       if (!prompt) return
+
+      const normalized = text.trim().toLowerCase().replace(/[.!?]+$/, "")
+      if (normalized === "abort" || normalized === "stop" || normalized === "cancel" || normalized === "esc" || normalized === "escape") {
+        sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        toast.show({ message: "Voice abort triggered", variant: "warning", duration: 1500 })
+        return
+      }
+
       prompt.set({ input: text, parts: [] })
       prompt.submit()
     }

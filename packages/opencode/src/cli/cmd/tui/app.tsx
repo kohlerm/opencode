@@ -42,6 +42,7 @@ import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
 import { VoiceProvider, useVoice } from "./context/voice"
+import { VoiceOverlay } from "./component/voice-overlay"
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -774,6 +775,7 @@ function App() {
           <Session />
         </Match>
       </Switch>
+      <VoiceOverlay />
     </box>
   )
 }

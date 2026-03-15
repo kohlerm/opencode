@@ -53,7 +53,6 @@ import { useCommandDialog } from "@tui/component/dialog-command"
 import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
 import { useVoice } from "../../context/voice"
-import { VoiceOverlay } from "../../component/voice-overlay"
 import { Header } from "./header"
 import { parsePatch } from "diff"
 import { useDialog } from "../../ui/dialog"
@@ -1287,7 +1286,6 @@ export function Session() {
             </Match>
           </Switch>
         </Show>
-        <VoiceOverlay />
       </box>
     </context.Provider>
   )

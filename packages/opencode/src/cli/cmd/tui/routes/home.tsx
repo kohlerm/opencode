@@ -137,6 +137,7 @@ export function Home() {
     b.on("transcriptFinal", handler)
     onCleanup(() => b.off("transcriptFinal", handler))
   })
+
   const directory = useDirectory()
 
   const keybind = useKeybind()

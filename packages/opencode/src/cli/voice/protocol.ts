@@ -1,6 +1,6 @@
 /**
  * Voice Protocol Types
- * 
+ *
  * JSON line protocol for communication between OpenCode and RCLI voice proxy
  * via Unix domain socket.
  */
@@ -38,12 +38,25 @@ export interface ErrorMessage {
   message: string
 }
 
+/**
+ * Audio chunk from RCLI CoreAudio capture — sent to OpenCode for client-side VAD.
+ * Base64-encoded PCM16 mono at 16000 Hz.
+ */
+export interface AudioChunkMessage {
+  type: "audio_chunk"
+  /** Base64-encoded PCM16 audio data */
+  data: string
+  /** Number of float32 samples (before PCM16 encoding) */
+  samples: number
+}
+
 export type RcliMessage =
   | TranscriptMessage
   | StateMessage
   | AudioLevelMessage
   | BargeInMessage
   | ErrorMessage
+  | AudioChunkMessage
 
 // ============================================================================
 // Bridge → RCLI messages (from OpenCode to voice proxy)
@@ -52,6 +65,8 @@ export type RcliMessage =
 export interface ToggleMessage {
   type: "toggle"
   enabled: boolean
+  /** When true, client handles mic/VAD; RCLI should not open CoreAudio */
+  clientAudioCapture?: boolean
 }
 
 export interface SpeakMessage {
@@ -74,19 +89,19 @@ export interface ConfigMessage {
 }
 
 /**
- * Audio data message - sent from OpenCode to RCLI when clientAudioCapture is enabled.
- * Audio data is base64-encoded PCM16 mono at 16000 Hz.
+ * Complete speech segment for offline STT (Parakeet TDT / Whisper).
+ * Sent when EnergyVad detects speech end. Contains the full utterance audio.
  */
-export interface AudioMessage {
-  type: "audio"
-  /** Base64-encoded PCM16 audio data */
+export interface AudioFinalMessage {
+  type: "audio_final"
+  /** Base64-encoded PCM16 audio data (complete utterance) */
   data: string
   /** Sample rate in Hz (typically 16000) */
   sampleRate: number
-  /** Whether this is the final chunk of a speech segment */
-  isFinal: boolean
+  /** Always true for final segments */
+  isFinal: true
   /** Timestamp in ms */
   timestamp?: number
 }
 
-export type BridgeMessage = ToggleMessage | SpeakMessage | InterruptMessage | ConfigMessage | AudioMessage
+export type BridgeMessage = ToggleMessage | SpeakMessage | InterruptMessage | ConfigMessage | AudioFinalMessage

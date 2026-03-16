@@ -1,6 +1,6 @@
 /**
  * Voice Context for TUI
- * 
+ *
  * SolidJS context for managing voice state in the TUI.
  * The VoiceBridge is only constructed when voice mode is enabled (Ctrl+V),
  * so no socket connections are attempted until the user explicitly toggles voice.
@@ -34,9 +34,7 @@ export interface VoiceContextValue {
 
 const VoiceContext = createContext<VoiceContextValue>()
 
-export function VoiceProvider(props: {
-  children: JSX.Element
-}) {
+export function VoiceProvider(props: { children: JSX.Element }) {
   const [isEnabled, setEnabled] = createSignal(false)
   const [state, setState] = createSignal<VoiceState>("idle")
   const [audioLevel, setAudioLevel] = createSignal(0)
@@ -95,9 +93,15 @@ export function VoiceProvider(props: {
       serverUrl: "http://localhost:4096",
       directory: process.cwd(),
       voiceConfig,
-      // Enable client-side audio capture with WebRTC VAD
+      // Enable client-side audio capture with energy-based VAD
       clientAudioCapture: true,
       vadAggressiveness: 3,
+      vadAdaptiveThreshold: true,
+      vadPreEmphasis: 0.97,
+      vadHangoverFrames: 5,
+      vadSilenceThresholdMs: 500,
+      vadMinSpeechDurationMs: 250,
+      vadMaxSpeechDurationMs: 30000,
     }
 
     const newBridge = new VoiceBridge(bridgeConfig)
@@ -128,18 +132,9 @@ export function VoiceProvider(props: {
 
     newBridge.on("transcript", (text: string, isFinal: boolean) => {
       vlog("VoiceCtx", `Transcript (final=${isFinal}): ${text}`)
+      if (!isFinal) return
       const trimmed = text.trim()
-      if (isFinal) {
-        setLastTranscript(trimmed)
-        return
-      }
-
-      // Suppress noisy micro-partials (single letters / fragments).
-      // Keep overlay stable and rely on finals for correctness.
-      if (trimmed.length <= 2) return
-      if (trimmed.length < 5 && !trimmed.includes(" ")) return
-
-      setLastTranscript(trimmed)
+      if (trimmed) setLastTranscript(trimmed)
     })
 
     newBridge.start().catch((err: unknown) => {

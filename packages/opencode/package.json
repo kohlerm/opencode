@@ -119,6 +119,7 @@
     "hono-openapi": "catalog:",
     "ignore": "7.0.5",
     "jsonc-parser": "3.3.1",
+    "mic": "2.1.2",
     "mime-types": "3.0.2",
     "minimatch": "10.0.3",
     "open": "10.1.2",
@@ -137,8 +138,7 @@
     "xdg-basedir": "5.1.0",
     "yargs": "18.0.0",
     "zod": "catalog:",
-    "zod-to-json-schema": "3.24.5",
-    "mic": "2.1.2"
+    "zod-to-json-schema": "3.24.5"
   },
   "overrides": {
     "drizzle-orm": "1.0.0-beta.16-ea816b6"

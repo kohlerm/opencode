@@ -1,6 +1,6 @@
 /**
  * Voice Overlay Component
- * 
+ *
  * Shows voice mode status in the TUI.
  * Only renders when voice mode is enabled via Ctrl+V.
  */
@@ -27,6 +27,13 @@ export function VoiceOverlay() {
       default:
         return "Voice Ready"
     }
+  })
+
+  const shortTranscript = createMemo(() => {
+    const t = voice.lastTranscript()
+    if (!t) return ""
+    const words = t.trim().split(/\s+/)
+    return (words.length > 4 ? "... " : "") + words.slice(-4).join(" ")
   })
 
   const stateColor = createMemo(() => {
@@ -66,8 +73,8 @@ export function VoiceOverlay() {
             <span style={{ fg: theme.textMuted }}> (disconnected)</span>
           </Show>
         </text>
-        <Show when={voice.lastTranscript()}>
-          <text fg={theme.text}>{voice.lastTranscript()}</text>
+        <Show when={shortTranscript()}>
+          <text fg={theme.text}>{shortTranscript()}</text>
         </Show>
       </box>
     </Show>

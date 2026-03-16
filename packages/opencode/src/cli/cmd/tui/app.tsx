@@ -42,7 +42,7 @@ import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
 import { VoiceProvider, useVoice } from "./context/voice"
-import { VoiceOverlay } from "./component/voice-overlay"
+// VoiceOverlay removed — voice state is shown inline in the Prompt footer
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY
@@ -144,35 +144,35 @@ export function tui(input: {
                     <RouteProvider>
                       <TuiConfigProvider config={input.config}>
                         <VoiceProvider>
-                        <SDKProvider
-                          url={input.url}
-                          directory={input.directory}
-                          fetch={input.fetch}
-                          headers={input.headers}
-                          events={input.events}
-                        >
-                          <SyncProvider>
-                            <ThemeProvider mode={mode}>
-                              <LocalProvider>
-                                <KeybindProvider>
-                                  <PromptStashProvider>
-                                    <DialogProvider>
-                                      <CommandProvider>
-                                        <FrecencyProvider>
-                                          <PromptHistoryProvider>
-                                            <PromptRefProvider>
-                                              <App />
-                                            </PromptRefProvider>
-                                          </PromptHistoryProvider>
-                                        </FrecencyProvider>
-                                      </CommandProvider>
-                                    </DialogProvider>
-                                  </PromptStashProvider>
-                                </KeybindProvider>
-                              </LocalProvider>
-                            </ThemeProvider>
-                          </SyncProvider>
-                        </SDKProvider>
+                          <SDKProvider
+                            url={input.url}
+                            directory={input.directory}
+                            fetch={input.fetch}
+                            headers={input.headers}
+                            events={input.events}
+                          >
+                            <SyncProvider>
+                              <ThemeProvider mode={mode}>
+                                <LocalProvider>
+                                  <KeybindProvider>
+                                    <PromptStashProvider>
+                                      <DialogProvider>
+                                        <CommandProvider>
+                                          <FrecencyProvider>
+                                            <PromptHistoryProvider>
+                                              <PromptRefProvider>
+                                                <App />
+                                              </PromptRefProvider>
+                                            </PromptHistoryProvider>
+                                          </FrecencyProvider>
+                                        </CommandProvider>
+                                      </DialogProvider>
+                                    </PromptStashProvider>
+                                  </KeybindProvider>
+                                </LocalProvider>
+                              </ThemeProvider>
+                            </SyncProvider>
+                          </SDKProvider>
                         </VoiceProvider>
                       </TuiConfigProvider>
                     </RouteProvider>
@@ -784,7 +784,6 @@ function App() {
           <Session />
         </Match>
       </Switch>
-      <VoiceOverlay />
     </box>
   )
 }

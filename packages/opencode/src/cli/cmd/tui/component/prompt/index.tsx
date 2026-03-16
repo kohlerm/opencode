@@ -34,6 +34,7 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
+import { useVoice } from "../../context/voice"
 
 export type PromptProps = {
   sessionID?: string
@@ -78,6 +79,38 @@ export function Prompt(props: PromptProps) {
   const renderer = useRenderer()
   const { theme, syntax } = useTheme()
   const kv = useKV()
+  const voice = useVoice()
+
+  const voiceLabel = createMemo(() => {
+    if (!voice.isEnabled()) return null
+    switch (voice.state()) {
+      case "listening":
+        return "Listening..."
+      case "processing":
+        return "Processing..."
+      case "speaking":
+        return "Speaking..."
+      case "interrupted":
+        return "Interrupted"
+      default:
+        return "Voice Ready"
+    }
+  })
+
+  const voiceColor = createMemo(() => {
+    switch (voice.state()) {
+      case "listening":
+        return theme.success
+      case "processing":
+        return theme.warning
+      case "speaking":
+        return theme.info
+      case "interrupted":
+        return theme.error
+      default:
+        return theme.textMuted
+    }
+  })
 
   function promptModelWarning() {
     toast.show({
@@ -1142,6 +1175,9 @@ export function Prompt(props: PromptProps) {
           </Show>
           <Show when={status().type !== "retry"}>
             <box gap={2} flexDirection="row">
+              <Show when={voiceLabel()}>
+                <text fg={voiceColor()}>{voiceLabel()}</text>
+              </Show>
               <Switch>
                 <Match when={store.mode === "normal"}>
                   <Show when={local.model.variant.list().length > 0}>

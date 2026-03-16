@@ -1,6 +1,6 @@
 /**
  * RCLI Socket Client
- * 
+ *
  * Unix domain socket client for communicating with the RCLI voice proxy.
  */
 
@@ -78,12 +78,18 @@ export class RcliSocketClient extends EventEmitter {
     if (!this.socket) return
 
     this.socket.on("data", (data: Buffer) => {
-      vlog("Socket", `Received ${data.length} bytes: ${data.toString("utf-8").trim()}`)
+      // Don't log audio_chunk data (too large)
+      if (data.length < 500) {
+        vlog("Socket", `Received ${data.length} bytes: ${data.toString("utf-8").trim()}`)
+      }
       this.handleData(data)
     })
 
     this.socket.on("close", (hadError: boolean) => {
-      vlog("Socket", `Socket closed! hadError=${hadError} destroyed=${this.destroyed} reconnect=${this.options.reconnect}`)
+      vlog(
+        "Socket",
+        `Socket closed! hadError=${hadError} destroyed=${this.destroyed} reconnect=${this.options.reconnect}`,
+      )
       this.socket = null
       this.emit("disconnect")
 
@@ -110,7 +116,9 @@ export class RcliSocketClient extends EventEmitter {
         const message = JSON.parse(line) as RcliMessage
         this.emit("message", message)
       } catch (err) {
-        this.emit("error", new Error(`Failed to parse message: ${line}`))
+        // Log parse errors (truncated audio_chunk messages etc)
+        const preview = line.length > 100 ? line.substring(0, 100) + "..." : line
+        vlog("Socket", `Parse error (${line.length} bytes): ${preview}`)
       }
     }
   }

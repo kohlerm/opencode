@@ -1,24 +1,23 @@
 /**
  * Voice Bridge
- * 
+ *
  * Main bridge component that connects RCLI voice proxy with OpenCode.
  * Manages the RCLI process, handles socket communication, and translates
  * between protocols.
- * 
- * With WebRTC VAD integration, this bridge now:
- * 1. Captures audio locally using `mic`
- * 2. Runs WebRTC VAD for speech detection
- * 3. Sends speech segments to RCLI for STT
+ *
+ * Architecture (client-side VAD):
+ * 1. RCLI captures audio via CoreAudio and streams PCM16 chunks over socket
+ * 2. Bridge runs EnergyVad on received chunks for speech detection
+ * 3. On speech end, bridge sends complete segment back to RCLI for offline STT (Parakeet TDT)
  */
 
 import { EventEmitter } from "node:events"
 import { spawn, type ChildProcess } from "node:child_process"
 import { RcliSocketClient } from "./socket-client"
 import { SentenceDetector, sanitizeForTts } from "./sentence-detector"
-import { AudioCapture } from "./audio-capture"
-import { WebRtcVad } from "./webrtc-vad"
+import { EnergyVad } from "./energy-vad"
 import type { RcliMessage, BridgeMessage } from "./protocol"
-import type { SpeechSegment } from "./webrtc-vad"
+import type { SpeechSegment } from "./energy-vad"
 import type { Config } from "../../config/config"
 import { vlog } from "./vlog"
 
@@ -33,10 +32,22 @@ export interface VoiceBridgeConfig {
   directory: string
   /** Voice configuration */
   voiceConfig: Config.Info["voice"]
-  /** Enable client-side audio capture with WebRTC VAD (default: true) */
+  /** Enable client-side audio capture with energy-based VAD (default: true) */
   clientAudioCapture?: boolean
-  /** WebRTC VAD aggressiveness (0-3, default: 3) */
+  /** VAD aggressiveness level (0-3, default: 3) */
   vadAggressiveness?: number
+  /** Enable adaptive noise floor threshold (default: true) */
+  vadAdaptiveThreshold?: boolean
+  /** Pre-emphasis coefficient (0.0-1.0, default: 0.97) */
+  vadPreEmphasis?: number
+  /** Hangover frames to prevent chopping (default: 5) */
+  vadHangoverFrames?: number
+  /** Silence threshold in ms before considering speech ended (default: 500) */
+  vadSilenceThresholdMs?: number
+  /** Minimum speech duration in ms to trigger a speech segment (default: 250) */
+  vadMinSpeechDurationMs?: number
+  /** Maximum speech duration in ms before forcing a split (default: 30000) */
+  vadMaxSpeechDurationMs?: number
 }
 
 export type VoiceState = "idle" | "listening" | "processing" | "speaking" | "interrupted"
@@ -60,8 +71,7 @@ export class VoiceBridge extends EventEmitter {
   private sentenceDetector: SentenceDetector
 
   // Audio capture and VAD
-  private audioCapture: AudioCapture | null = null
-  private webRtcVad: WebRtcVad | null = null
+  private energyVad: EnergyVad | null = null
   private isCapturing = false
 
   private state: VoiceState = "idle"
@@ -72,6 +82,7 @@ export class VoiceBridge extends EventEmitter {
   private audioLevel = 0
   private isSpeech = false
   private lastTranscript = ""
+  private processingTimeout: ReturnType<typeof setTimeout> | null = null
 
   // Barge-in detection
   private playbackRms = 0
@@ -83,20 +94,26 @@ export class VoiceBridge extends EventEmitter {
   constructor(config: VoiceBridgeConfig) {
     super()
     vlog("Bridge", `constructor called, socketPath=${config.socketPath}`)
-    
+
     // Set defaults
     this.config = {
       ...config,
       clientAudioCapture: config.clientAudioCapture ?? true,
       vadAggressiveness: config.vadAggressiveness ?? 3,
+      vadAdaptiveThreshold: config.vadAdaptiveThreshold ?? true,
+      vadPreEmphasis: config.vadPreEmphasis ?? 0.97,
+      vadHangoverFrames: config.vadHangoverFrames ?? 5,
+      vadSilenceThresholdMs: config.vadSilenceThresholdMs ?? 300,
+      vadMinSpeechDurationMs: config.vadMinSpeechDurationMs ?? 250,
+      vadMaxSpeechDurationMs: config.vadMaxSpeechDurationMs ?? 30000,
     }
-    
+
     this.socket = new RcliSocketClient({
       socketPath: config.socketPath,
       reconnect: true,
       reconnectDelay: 1000,
     })
-    
+
     this.sentenceDetector = new SentenceDetector({
       minWords: config.voiceConfig?.tts?.speed === 1.0 ? 6 : 4,
       firstSentenceMinWords: 1,
@@ -136,17 +153,18 @@ export class VoiceBridge extends EventEmitter {
     if (socketPath.startsWith("~")) {
       socketPath = socketPath.replace("~", process.env.HOME || "~")
     }
-    
+
     vlog("Bridge", `Connecting to RCLI proxy at ${socketPath}...`)
-    
+
     try {
-      await this.socket.connect()
-      vlog("Bridge", "Connected to RCLI proxy successfully!")
-      
-      // Initialize audio capture and VAD if enabled
+      // Initialize audio capture and VAD BEFORE connecting,
+      // so they're ready when the connect handler calls toggle().
       if (this.config.clientAudioCapture) {
         await this.initAudioCapture()
       }
+
+      await this.socket.connect()
+      vlog("Bridge", "Connected to RCLI proxy successfully!")
     } catch (err) {
       vlog("Bridge", `Failed to connect to RCLI proxy: ${err}`)
       throw err
@@ -154,75 +172,63 @@ export class VoiceBridge extends EventEmitter {
   }
 
   /**
-   * Initialize audio capture and WebRTC VAD.
+   * Initialize energy-based VAD for processing audio chunks from RCLI.
+   * Audio capture is handled by RCLI (CoreAudio) — we only need the VAD here.
    */
   private async initAudioCapture(): Promise<void> {
-    vlog("Bridge", "Initializing audio capture with WebRTC VAD...")
+    vlog("Bridge", "Initializing energy-based VAD...")
 
     try {
-      // Create audio capture (16kHz, mono, 16-bit)
-      this.audioCapture = new AudioCapture({
-        sampleRate: 16000,
-        channels: 1,
-        bitDepth: 16,
-        debug: false,
-      })
-
-      // Create WebRTC VAD
-      this.webRtcVad = new WebRtcVad({
+      // Create energy-based VAD
+      this.energyVad = new EnergyVad({
         sampleRate: 16000,
         frameDuration: 30,
         aggressiveness: this.config.vadAggressiveness,
-        silenceThresholdMs: 500,
-        minSpeechDurationMs: 250,
-        maxSpeechDurationMs: 30000,
+        silenceThresholdMs: this.config.vadSilenceThresholdMs,
+        minSpeechDurationMs: this.config.vadMinSpeechDurationMs,
+        maxSpeechDurationMs: this.config.vadMaxSpeechDurationMs,
+        adaptiveThreshold: this.config.vadAdaptiveThreshold,
+        preEmphasis: this.config.vadPreEmphasis,
+        hangoverFrames: this.config.vadHangoverFrames,
       })
 
       // Initialize VAD
-      await this.webRtcVad.init()
-
-      // Setup audio capture handlers
-      this.audioCapture.on("data", (chunk) => {
-        this.handleAudioChunk(chunk)
-      })
-
-      this.audioCapture.on("error", (err) => {
-        vlog("Bridge", `Audio capture error: ${err.message}`)
-        this.emit("error", err)
-      })
+      await this.energyVad.init()
 
       // Setup VAD handlers
-      this.webRtcVad.on("speechStart", () => {
+      this.energyVad.on("speechStart", () => {
         this.isSpeech = true
         this.emit("audioLevel", this.audioLevel, true)
         vlog("Bridge", "VAD: Speech started")
       })
 
-      this.webRtcVad.on("speechEnd", (segment: SpeechSegment) => {
+      this.energyVad.on("speechEnd", (segment: SpeechSegment) => {
         this.isSpeech = false
         this.emit("audioLevel", this.audioLevel, false)
         this.handleSpeechSegment(segment)
       })
 
-      vlog("Bridge", "Audio capture and VAD initialized successfully")
+      vlog("Bridge", "Energy-based VAD initialized successfully")
     } catch (err) {
-      vlog("Bridge", `Failed to initialize audio capture: ${err}`)
+      vlog("Bridge", `Failed to initialize VAD: ${err}`)
       throw err
     }
   }
 
-  private handleAudioChunk(chunk: { buffer: Buffer; sampleRate: number; samples: number; timestamp: number }): void {
-    if (!this.webRtcVad || !this.isEnabled) {
-      if (!this.webRtcVad) vlog("Bridge", "Skipping audio chunk - VAD not initialized")
-      if (!this.isEnabled) vlog("Bridge", "Skipping audio chunk - voice not enabled")
+  /**
+   * Handle audio chunk received from RCLI via socket (CoreAudio capture).
+   * Feed to EnergyVad for speech detection.
+   */
+  private handleAudioChunk(buffer: Buffer, timestamp: number): void {
+    if (!this.energyVad || !this.isEnabled) {
       return
     }
 
     // Calculate RMS for audio level
     let sum = 0
-    const samples = new Int16Array(chunk.buffer.buffer, chunk.buffer.byteOffset, chunk.buffer.length / 2)
+    const samples = new Int16Array(buffer.buffer, buffer.byteOffset, buffer.length / 2)
     for (let i = 0; i < samples.length; i++) {
-      const sample = samples[i] / 32768.0 // Normalize to -1.0 to 1.0
+      const sample = samples[i] / 32768.0
       sum += sample * sample
     }
     this.audioLevel = Math.sqrt(sum / samples.length)
@@ -233,7 +239,7 @@ export class VoiceBridge extends EventEmitter {
     }
 
     // Process audio with VAD
-    this.webRtcVad.processAudio(chunk.buffer, chunk.timestamp)
+    this.energyVad.processAudio(buffer, timestamp)
   }
 
   /**
@@ -248,7 +254,7 @@ export class VoiceBridge extends EventEmitter {
 
     if (this.isSpeech && strongMic && louderThanSpeaker) {
       this.consecutiveSpeechFrames++
-      
+
       if (this.consecutiveSpeechFrames >= this.BARGE_IN_DEBOUNCE_FRAMES) {
         vlog("Bridge", `Barge-in detected: mic=${micRms.toFixed(4)}, pb=${pbRms.toFixed(4)}`)
         this.handleBargeIn()
@@ -278,56 +284,64 @@ export class VoiceBridge extends EventEmitter {
     vlog("Bridge", `Sending speech segment to RCLI: ${segment.durationMs}ms, ${segment.buffer.length} bytes`)
 
     // Convert audio to base64
-    const audioBase64 = segment.buffer.toString("base64")
+    const audio = segment.buffer.toString("base64")
 
-    // Send to RCLI
+    // Send complete segment as audio_final for Parakeet TDT / Whisper offline transcription
     this.send({
-      type: "audio",
-      data: audioBase64,
+      type: "audio_final",
+      data: audio,
       sampleRate: 16000,
       isFinal: true,
       timestamp: segment.startTime,
     })
 
     this.setState("processing")
+
+    // Safety timeout: if no transcript arrives within 5s, go back to listening
+    this.clearProcessingTimeout()
+    this.processingTimeout = setTimeout(() => {
+      if (this.state === "processing") {
+        vlog("Bridge", "Processing timeout — no transcript received, returning to listening")
+        this.setState("listening")
+      }
+    }, 5000)
   }
 
   /**
-   * Start audio capture when entering listening state.
+   * Start audio capture — RCLI handles mic via CoreAudio,
+   * we just need to mark ourselves as ready to receive audio_chunk messages.
    */
   private async startAudioCapture(): Promise<void> {
-    if (!this.audioCapture || !this.webRtcVad) {
-      vlog("Bridge", `Cannot start capture: audioCapture=${!!this.audioCapture}, webRtcVad=${!!this.webRtcVad}`)
+    if (!this.energyVad) {
+      vlog("Bridge", `Cannot start capture: VAD not initialized`)
       return
     }
-    
+
     if (this.isCapturing) {
       vlog("Bridge", "Audio capture already active, ignoring start request")
       return
     }
 
-    try {
-      vlog("Bridge", "Starting audio capture...")
-      await this.audioCapture.start()
-      this.isCapturing = true
-      vlog("Bridge", "Audio capture started successfully")
-    } catch (err) {
-      vlog("Bridge", `Failed to start audio capture: ${err}`)
-      this.emit("error", err instanceof Error ? err : new Error(String(err)))
-    }
+    this.isCapturing = true
+    vlog("Bridge", "Audio capture started (RCLI handles mic)")
   }
 
   /**
    * Stop audio capture.
    */
   private stopAudioCapture(): void {
-    if (this.audioCapture) {
-      this.audioCapture.stop()
-      this.isCapturing = false
-      vlog("Bridge", "Audio capture stopped")
+    this.isCapturing = false
+    this.clearProcessingTimeout()
+    if (this.energyVad) {
+      this.energyVad.stop()
     }
-    if (this.webRtcVad) {
-      this.webRtcVad.stop()
+    vlog("Bridge", "Audio capture stopped")
+  }
+
+  private clearProcessingTimeout(): void {
+    if (this.processingTimeout) {
+      clearTimeout(this.processingTimeout)
+      this.processingTimeout = null
     }
   }
 
@@ -351,7 +365,8 @@ export class VoiceBridge extends EventEmitter {
   toggle(enabled: boolean): void {
     vlog("Bridge", `toggle(${enabled}) called`)
     this.isEnabled = enabled
-    this.send({ type: "toggle", enabled })
+    // Send toggle with clientAudioCapture flag so RCLI knows not to open its own mic
+    this.send({ type: "toggle", enabled, clientAudioCapture: this.config.clientAudioCapture })
 
     if (enabled) {
       // Start audio capture immediately when enabled (don't wait for state change)
@@ -485,7 +500,28 @@ export class VoiceBridge extends EventEmitter {
         this.handleTranscript(msg.text, msg.isFinal)
         break
       case "state":
-        this.setState(msg.state)
+        // In client audio mode, the bridge manages listening/processing state
+        // based on local VAD.  Accept RCLI state messages for:
+        //  - "speaking" and "interrupted" which RCLI controls (TTS playback)
+        // Ignore RCLI "idle", "listening", "processing" which would clobber local state.
+        if (this.config.clientAudioCapture) {
+          if (msg.state === "speaking" || msg.state === "interrupted") {
+            this.setState(msg.state)
+          }
+        } else {
+          this.setState(msg.state)
+        }
+        break
+      case "audio_chunk":
+        // Audio from RCLI CoreAudio capture — feed to local EnergyVad
+        if (this.config.clientAudioCapture && this.isCapturing) {
+          const buf = Buffer.from(msg.data, "base64")
+          this.handleAudioChunk(buf, Date.now())
+        }
+        if (this.config.clientAudioCapture && this.isCapturing) {
+          const buf = Buffer.from(msg.data, "base64")
+          this.handleAudioChunk(buf, Date.now())
+        }
         break
       case "audio_level":
         // Only use RCLI audio levels if not using client audio capture
@@ -505,13 +541,26 @@ export class VoiceBridge extends EventEmitter {
   }
 
   private handleTranscript(text: string, isFinal: boolean): void {
+    if (isFinal && !text.trim()) {
+      // Empty final — STT produced no result (e.g. short noise).
+      // Just go back to listening without submitting anything.
+      vlog("Bridge", "Empty final transcript — returning to listening")
+      this.clearProcessingTimeout()
+      if (this.isEnabled) {
+        this.setState("listening")
+      }
+      return
+    }
+
     this.lastTranscript = text
     this.emit("transcript", text, isFinal)
 
     if (isFinal) {
+      this.clearProcessingTimeout()
+
       // Send final transcript event (session may be null on Home route).
       this.sendToOpencode(text)
-      
+
       // After final transcript, go back to listening state
       if (this.isEnabled) {
         this.setState("listening")
@@ -563,17 +612,12 @@ export class VoiceBridge extends EventEmitter {
       this.state = state
       this.emit("stateChange", state)
 
-      // When entering listening state, start audio capture
-      if (state === "listening" && this.config.clientAudioCapture && this.isEnabled) {
+      // Keep audio capture running continuously while voice is enabled.
+      // The mic + VAD pipeline must stay active so we can detect the next
+      // utterance after processing finishes.  Only start here if it wasn't
+      // already started by toggle().
+      if (state === "listening" && this.config.clientAudioCapture && this.isEnabled && !this.isCapturing) {
         this.startAudioCapture()
-      }
-
-      // When leaving listening state, stop audio capture
-      if (state !== "listening" && this.config.clientAudioCapture) {
-        if (this.audioCapture?.isActive()) {
-          this.audioCapture.stop()
-          this.isCapturing = false
-        }
       }
 
       // When speaking finishes, process next in queue

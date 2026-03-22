@@ -1,13 +1,13 @@
 /**
  * Audio Capture Module
  *
- * Captures audio from the microphone using the `mic` library.
+ * Captures audio from the microphone using coreaudio-node.
  * Provides a stream of audio chunks for VAD processing.
  */
 
 import { EventEmitter } from "node:events"
+import { MicrophoneRecorder } from "./coreaudio"
 import { vlog } from "./vlog"
-import mic from "mic"
 
 export interface AudioCaptureOptions {
   /** Sample rate in Hz (default: 16000) */
@@ -37,9 +37,8 @@ export interface AudioChunk {
 
 export class AudioCapture extends EventEmitter {
   private options: Required<AudioCaptureOptions>
-  private mic: ReturnType<typeof mic> | null = null
+  private recorder: any = null
   private isCapturing = false
-  private audioStream: NodeJS.ReadableStream | null = null
 
   constructor(options: AudioCaptureOptions = {}) {
     super()
@@ -62,66 +61,59 @@ export class AudioCapture extends EventEmitter {
       return
     }
 
-    vlog("AudioCapture", `Starting capture: ${this.options.sampleRate}Hz, ${this.options.channels}ch, ${this.options.bitDepth}bit`)
+    vlog(
+      "AudioCapture",
+      `Starting capture: ${this.options.sampleRate}Hz, ${this.options.channels}ch, ${this.options.bitDepth}bit`,
+    )
 
-    this.mic = mic({
-      rate: String(this.options.sampleRate),
-      channels: String(this.options.channels),
-      bitwidth: String(this.options.bitDepth),
-      device: this.options.device ?? undefined,
-      exitOnSilence: this.options.exitOnSilence,
-      debug: this.options.debug,
+    this.recorder = new MicrophoneRecorder({
+      sampleRate: this.options.sampleRate,
+      chunkDurationMs: 80,
+      stereo: this.options.channels > 1,
+      deviceId: this.options.device ?? undefined,
     })
 
-    this.audioStream = this.mic.getAudioStream()
-
-    // Handle audio data
-    this.audioStream!.on("data", (data: Buffer) => {
-      const chunk: AudioChunk = {
-        buffer: data,
-        sampleRate: this.options.sampleRate,
-        samples: data.length / (this.options.bitDepth / 8),
-        timestamp: Date.now(),
-      }
-      this.emit("data", chunk)
-    })
-
-    // Handle errors
-    this.audioStream!.on("error", (err: Error) => {
-      vlog("AudioCapture", `Stream error: ${err.message}`)
+    this.recorder.on("error", (err: Error) => {
+      vlog("AudioCapture", `Recorder error: ${err.message}`)
       this.emit("error", err)
     })
 
-    // Handle silence (if exitOnSilence is set)
-    this.audioStream!.on("silence", () => {
-      vlog("AudioCapture", "Silence detected")
-      this.emit("silence")
+    this.recorder.on("data", (chunk: { data: Buffer }) => {
+      const audioChunk: AudioChunk = {
+        buffer: chunk.data,
+        sampleRate: this.options.sampleRate,
+        samples: chunk.data.length / (this.options.bitDepth / 8),
+        timestamp: Date.now(),
+      }
+      this.emit("data", audioChunk)
     })
 
-    // Handle process exit
-    this.audioStream!.on("processExitComplete", () => {
-      vlog("AudioCapture", "Process exited")
+    this.recorder.on("start", () => {
+      vlog("AudioCapture", "Capture started")
+      this.isCapturing = true
+      this.emit("started")
+    })
+
+    this.recorder.on("stop", () => {
+      vlog("AudioCapture", "Capture stopped")
       this.isCapturing = false
       this.emit("stopped")
     })
 
-    this.mic!.start()
-    this.isCapturing = true
-    vlog("AudioCapture", "Capture started")
-    this.emit("started")
+    await this.recorder.start()
   }
 
   /**
    * Stop capturing audio.
    */
-  stop(): void {
-    if (!this.isCapturing || !this.mic) {
+  async stop(): Promise<void> {
+    if (!this.isCapturing || !this.recorder) {
       vlog("AudioCapture", "Not capturing, ignoring stop()")
       return
     }
 
     vlog("AudioCapture", "Stopping capture...")
-    this.mic.stop()
+    await this.recorder.stop()
     this.isCapturing = false
   }
 
@@ -129,24 +121,14 @@ export class AudioCapture extends EventEmitter {
    * Pause capturing (silence detection still active).
    */
   pause(): void {
-    if (!this.isCapturing || !this.mic) {
-      return
-    }
-
-    vlog("AudioCapture", "Pausing capture")
-    this.mic.pause()
+    vlog("AudioCapture", "Pause not implemented in coreaudio-node")
   }
 
   /**
    * Resume capturing.
    */
   resume(): void {
-    if (!this.isCapturing || !this.mic) {
-      return
-    }
-
-    vlog("AudioCapture", "Resuming capture")
-    this.mic.resume()
+    vlog("AudioCapture", "Resume not implemented in coreaudio-node")
   }
 
   /**

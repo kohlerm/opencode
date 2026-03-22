@@ -200,6 +200,18 @@ for (const item of targets) {
   })
 
   await $`rm -rf ./dist/${name}/bin/tui`
+
+  // Copy coreaudio.node native addon for macOS targets (voice support)
+  if (item.os === "darwin") {
+    const src = path.resolve(dir, "node_modules/coreaudio-node/build/Release/coreaudio.node")
+    const root = path.resolve(dir, "../../node_modules/coreaudio-node/build/Release/coreaudio.node")
+    const addon = fs.existsSync(src) ? src : fs.existsSync(root) ? root : undefined
+    if (addon) {
+      fs.copyFileSync(addon, `dist/${name}/bin/coreaudio.node`)
+      console.log(`  copied coreaudio.node for ${name}`)
+    }
+  }
+
   await Bun.file(`dist/${name}/package.json`).write(
     JSON.stringify(
       {

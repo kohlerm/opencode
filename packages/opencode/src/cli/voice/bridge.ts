@@ -1,13 +1,13 @@
 /**
  * Voice Bridge — Kyutai MLX Streaming STT
  *
- * Uses the `mic` package for JavaScript audio capture, piping PCM to
+ * Uses coreaudio-node for native macOS audio capture, piping PCM to
  * the Kyutai streaming_stt_server.py process. Reads JSON-line
  * transcription tokens from the server's stdout.
  *
  * Architecture:
- *   mic (CoreAudio mic → PCM f32le 24kHz mono)
- *     ──► streaming_stt_server.py stdin
+ *   MicrophoneRecorder (CoreAudio → PCM int16 24kHz mono → float32 conversion)
+ *     ──► streaming_stt_server.py stdin (expects float32 LE)
  *     ──► MLX inference (token-by-token)
  *     ──► JSON lines on stdout → this bridge
  *         {"type":"token","text":" hello"}
@@ -16,7 +16,7 @@
 
 import { EventEmitter } from "node:events"
 import { spawn, type ChildProcess } from "node:child_process"
-import mic from "mic"
+import { MicrophoneRecorder } from "./coreaudio"
 import { vlog } from "./vlog"
 
 export interface VoiceBridgeConfig {
@@ -49,8 +49,7 @@ export interface VoiceBridgeEvents {
 export class VoiceBridge extends EventEmitter {
   private config: Required<VoiceBridgeConfig>
   private python: ChildProcess | null = null
-  private micInstance: any = null
-  private micStream: any = null
+  private recorder: any = null
   private state: VoiceState = "idle"
   private sessionID: string | null = null
   private isEnabled = false
@@ -125,10 +124,9 @@ export class VoiceBridge extends EventEmitter {
     vlog("Bridge", "stop() called")
     this.isEnabled = false
     this.clearSilenceTimer()
-    if (this.micInstance) {
-      this.micInstance.stop()
-      this.micInstance = null
-      this.micStream = null
+    if (this.recorder) {
+      this.recorder.stop().catch(() => {})
+      this.recorder = null
     }
     if (this.python) {
       this.python.kill()
@@ -158,39 +156,42 @@ export class VoiceBridge extends EventEmitter {
     return new Promise((resolve, reject) => {
       vlog("Bridge", "Starting mic capture (24kHz mono float32)")
 
-      this.micInstance = mic({
-        rate: "24000",
-        channels: "1",
-        bitwidth: "32",
-        exitOnSilence: 0,
-        debug: false,
+      this.recorder = new MicrophoneRecorder({
+        sampleRate: 24000,
+        chunkDurationMs: 80,
+        stereo: false,
       })
 
-      this.micStream = this.micInstance.getAudioStream()
-
-      this.micStream.on("error", (err: Error) => {
+      this.recorder.on("error", (err: Error) => {
         vlog("Bridge", `Mic error: ${err.message}`)
         this.emit("error", err)
       })
 
-      // Pipe mic audio directly to Python stdin
-      this.micStream.pipe(this.python!.stdin!)
+      this.recorder.on("data", (chunk: { data: Buffer }) => {
+        if (this.python?.stdin?.writable) {
+          // CoreAudio native addon produces int16 PCM; STT server expects float32
+          const samples = chunk.data.length / 2
+          const f32 = Buffer.alloc(samples * 4)
+          for (let i = 0; i < samples; i++) {
+            f32.writeFloatLE(chunk.data.readInt16LE(i * 2) / 32768, i * 4)
+          }
+          this.python.stdin.write(f32)
+        }
+      })
 
-      this.micInstance.on("start", () => {
+      this.recorder.on("start", () => {
         vlog("Bridge", "Mic started")
         resolve()
       })
 
-      this.micInstance.on("stop", () => {
+      this.recorder.on("stop", () => {
         vlog("Bridge", "Mic stopped")
       })
 
-      this.micInstance.on("error", (err: Error) => {
-        vlog("Bridge", `Mic instance error: ${err.message}`)
+      this.recorder.start().catch((err: Error) => {
+        vlog("Bridge", `Mic start error: ${err.message}`)
         reject(err)
       })
-
-      this.micInstance.start()
     })
   }
 

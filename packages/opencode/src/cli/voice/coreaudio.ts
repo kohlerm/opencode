@@ -17,6 +17,13 @@ import path from "node:path"
 
 const req = createRequire(import.meta.url)
 
+function quiet() {
+  if (process.platform !== "darwin") return
+  if (process.env.OPENCODE_VOICE_NATIVE_LOGS === "1") return
+  process.env.OS_ACTIVITY_MODE ??= "disable"
+  process.env.CFLOG_FORCE_STDERR ??= "0"
+}
+
 function load(): any {
   const paths = [
     // Next to the binary (compiled build)
@@ -54,6 +61,7 @@ export class MicrophoneRecorder extends EventEmitter {
   constructor(opts: Record<string, any> = {}) {
     super()
     if (process.platform !== "darwin") throw new Error("coreaudio-node only supports macOS")
+    quiet()
     this.native = new (addon().AudioRecorderNative)()
     this.opts = opts
   }

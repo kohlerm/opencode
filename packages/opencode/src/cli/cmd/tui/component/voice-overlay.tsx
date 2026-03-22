@@ -16,6 +16,8 @@ export function VoiceOverlay() {
 
   const stateLabel = createMemo(() => {
     switch (voice.state()) {
+      case "starting":
+        return "Starting..."
       case "listening":
         return "Listening..."
       case "processing":
@@ -38,6 +40,8 @@ export function VoiceOverlay() {
 
   const stateColor = createMemo(() => {
     switch (voice.state()) {
+      case "starting":
+        return theme.textMuted
       case "listening":
         return theme.success
       case "processing":

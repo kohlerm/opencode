@@ -32,7 +32,7 @@ export interface VoiceBridgeConfig {
   maxSteps?: number
 }
 
-export type VoiceState = "idle" | "listening" | "processing" | "speaking" | "interrupted"
+export type VoiceState = "idle" | "starting" | "listening" | "processing" | "speaking" | "interrupted"
 
 export interface VoiceBridgeEvents {
   connect: () => void
@@ -74,6 +74,7 @@ export class VoiceBridge extends EventEmitter {
 
   async start(): Promise<void> {
     vlog("Bridge", "start() — spawning STT server + mic")
+    this.setState("starting")
 
     const args = [this.config.sttServerPath, "--model", this.config.model]
     if (this.config.vad) args.push("--vad")

@@ -22,7 +22,10 @@ function quiet() {
   if (process.env.OPENCODE_VOICE_NATIVE_LOGS === "1") return
   process.env.OS_ACTIVITY_MODE ??= "disable"
   process.env.CFLOG_FORCE_STDERR ??= "0"
+  process.env.CFLOG_FORCE_DISABLE_STDERR ??= "1"
 }
+
+quiet()
 
 function load(): any {
   const paths = [

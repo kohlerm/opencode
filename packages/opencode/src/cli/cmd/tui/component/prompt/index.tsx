@@ -84,6 +84,8 @@ export function Prompt(props: PromptProps) {
   const voiceLabel = createMemo(() => {
     if (!voice.isEnabled()) return null
     switch (voice.state()) {
+      case "starting":
+        return "Starting voice..."
       case "listening":
         return "Listening..."
       case "processing":
@@ -99,6 +101,8 @@ export function Prompt(props: PromptProps) {
 
   const voiceColor = createMemo(() => {
     switch (voice.state()) {
+      case "starting":
+        return theme.textMuted
       case "listening":
         return theme.success
       case "processing":

@@ -1,6 +1,6 @@
 /**
  * Voice CLI Command
- * 
+ *
  * `opencode voice` subcommand for managing voice mode.
  */
 
@@ -55,23 +55,23 @@ export const VoiceCommand = cmd({
 })
 
 async function startVoiceMode(args: any, config: Config.Info): Promise<void> {
+  const sttServer =
+    process.env.OPENCODE_STT_SERVER ?? `${process.env.HOME}/parakeet-mlx/kyutai-mlx/python/streaming_stt_server.py`
+
   const bridgeConfig: VoiceBridgeConfig = {
-    rcliPath: args["rcliPath"] || config.voice?.rcliPath || "../../rcli/build/rcli",
-    socketPath: args["socketPath"] || config.voice?.socketPath || "~/.opencode/rcli-voice.sock",
-    serverUrl: "http://localhost:4096", // Will be detected from running server
-    directory: process.cwd(),
-    voiceConfig: config.voice,
+    sttServerPath: sttServer,
+    python: process.env.OPENCODE_PYTHON ?? "python3",
+    model: "kyutai/stt-1b-en_fr-mlx",
+    vad: true,
   }
 
   console.log("Starting voice mode...")
-  console.log(`RCLI path: ${bridgeConfig.rcliPath}`)
-  console.log(`Socket path: ${bridgeConfig.socketPath}`)
+  console.log(`STT server: ${bridgeConfig.sttServerPath}`)
 
   const bridge = new VoiceBridge(bridgeConfig)
 
   bridge.on("connect", () => {
-    console.log("✓ Connected to RCLI voice proxy")
-    bridge.toggle(true)
+    console.log("✓ Connected to Kyutai STT")
     console.log("✓ Voice mode enabled. Speak to interact with OpenCode.")
     console.log("  Press Ctrl+C to stop.")
   })

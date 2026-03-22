@@ -2,8 +2,8 @@
  * Voice Context for TUI
  *
  * SolidJS context for managing voice state in the TUI.
- * The VoiceBridge is only constructed when voice mode is enabled (Ctrl+V),
- * so no socket connections are attempted until the user explicitly toggles voice.
+ * The VoiceBridge is only constructed when voice mode is enabled (Ctrl+V).
+ * Uses Kyutai MLX streaming STT via streaming_stt_server.py.
  */
 
 import { createContext, useContext, createSignal, createEffect, onCleanup } from "solid-js"
@@ -30,6 +30,8 @@ export interface VoiceContextValue {
   isConnected: Accessor<boolean>
   /** The voice bridge instance (for direct access) */
   bridge: Accessor<VoiceBridge | null>
+  /** Streaming transcript (partial, in-progress) — null when idle */
+  streamingTranscript: Accessor<string | null>
 }
 
 const VoiceContext = createContext<VoiceContextValue>()
@@ -42,113 +44,83 @@ export function VoiceProvider(props: { children: JSX.Element }) {
   const [lastTranscript, setLastTranscript] = createSignal("")
   const [isConnected, setIsConnected] = createSignal(false)
   const [bridge, setBridge] = createSignal<VoiceBridge | null>(null)
+  const [streamingTranscript, setStreamingTranscript] = createSignal<string | null>(null)
 
-  let currentBridge: VoiceBridge | null = null
-  let effectRunCount = 0
+  let current: VoiceBridge | null = null
+  let runs = 0
 
-  // Lazily connect to RCLI when voice is enabled
   createEffect(() => {
     const enabled = isEnabled()
-    effectRunCount++
-    vlog("VoiceCtx", `createEffect run #${effectRunCount}, isEnabled=${enabled}, hasBridge=${!!currentBridge}`)
+    runs++
+    vlog("VoiceCtx", `createEffect run #${runs}, isEnabled=${enabled}, hasBridge=${!!current}`)
 
     if (!enabled) {
-      // Tear down bridge when disabled
-      if (currentBridge) {
+      if (current) {
         vlog("VoiceCtx", "Tearing down bridge (isEnabled=false)")
-        currentBridge.stop()
-        currentBridge = null
+        current.stop()
+        current = null
         setBridge(null)
         setIsConnected(false)
         setState("idle")
+        setStreamingTranscript(null)
       }
       return
     }
 
-    // Build config from defaults (voice config from opencode config may not exist yet)
-    const voiceConfig = {
-      enabled: true,
-      keybind: "ctrl+v",
-      rcliPath: "../../rcli/build/rcli",
-      socketPath: "~/.opencode/rcli-voice.sock",
-      stt: { model: "zipformer" as const, language: "en" },
-      tts: { model: "kokoro-en" as const, speed: 1.0 },
-      vad: { threshold: 0.5, minSilenceDuration: 0.5, minSpeechDuration: 0.25 },
-      permissions: {
-        voiceConfirm: true,
-        autoApprove: ["read", "glob"],
-        requireConfirm: ["write", "edit", "bash"],
-      },
-      ui: {
-        overlayPosition: "bottom" as const,
-        showWaveform: true,
-        showTranscript: true,
-        transcriptTimeout: 3000,
-      },
-    }
+    const sttServer =
+      process.env.OPENCODE_STT_SERVER ?? `${process.env.HOME}/parakeet-mlx/kyutai-mlx/python/streaming_stt_server.py`
 
-    const bridgeConfig = {
-      rcliPath: voiceConfig.rcliPath,
-      socketPath: voiceConfig.socketPath,
-      serverUrl: "http://localhost:4096",
-      directory: process.cwd(),
-      voiceConfig,
-      // Enable client-side audio capture with energy-based VAD
-      clientAudioCapture: true,
-      vadAggressiveness: 3,
-      vadAdaptiveThreshold: true,
-      vadPreEmphasis: 0.97,
-      vadHangoverFrames: 5,
-      vadSilenceThresholdMs: 500,
-      vadMinSpeechDurationMs: 250,
-      vadMaxSpeechDurationMs: 30000,
-    }
+    const b = new VoiceBridge({
+      sttServerPath: sttServer,
+      python: process.env.OPENCODE_PYTHON ?? "python3",
+      model: "kyutai/stt-1b-en_fr-mlx",
+      vad: true,
+    })
+    current = b
+    setBridge(b)
 
-    const newBridge = new VoiceBridge(bridgeConfig)
-    currentBridge = newBridge
-    setBridge(newBridge)
-
-    newBridge.on("connect", () => {
-      vlog("VoiceCtx", "Bridge connected! Sending toggle(true)")
+    b.on("connect", () => {
+      vlog("VoiceCtx", "Bridge connected!")
       setIsConnected(true)
-      // Start STT capture now that we're connected
-      newBridge.toggle(true)
     })
 
-    newBridge.on("disconnect", () => {
+    b.on("disconnect", () => {
       vlog("VoiceCtx", "Bridge disconnected!")
       setIsConnected(false)
+      setStreamingTranscript(null)
     })
 
-    newBridge.on("stateChange", (newState: VoiceState) => {
-      vlog("VoiceCtx", `State change: ${newState}`)
-      setState(newState)
+    b.on("stateChange", (s: VoiceState) => {
+      vlog("VoiceCtx", `State change: ${s}`)
+      setState(s)
     })
 
-    newBridge.on("audioLevel", (level: number, speech: boolean) => {
+    b.on("audioLevel", (level: number, speech: boolean) => {
       setAudioLevel(level)
       setIsSpeech(speech)
     })
 
-    newBridge.on("transcript", (text: string, isFinal: boolean) => {
+    b.on("transcript", (text: string, isFinal: boolean) => {
       vlog("VoiceCtx", `Transcript (final=${isFinal}): ${text}`)
-      if (!isFinal) return
-      const trimmed = text.trim()
-      if (trimmed) setLastTranscript(trimmed)
+      if (isFinal) {
+        setLastTranscript(text.trim())
+        setStreamingTranscript(null)
+      } else {
+        // Append token to streaming transcript
+        setStreamingTranscript((prev) => (prev ?? "") + text)
+      }
     })
 
-    newBridge.start().catch((err: unknown) => {
+    b.start().catch((err: unknown) => {
       vlog("VoiceCtx", `Failed to start voice bridge: ${err}`)
-      // Don't disable — user might want to see the disconnected state
     })
   })
 
-  // Cleanup on unmount
   onCleanup(() => {
     vlog("VoiceCtx", "VoiceProvider onCleanup (unmount)")
-    if (currentBridge) {
-      currentBridge.stop()
-      currentBridge = null
+    if (current) {
+      current.stop()
+      current = null
     }
   })
 
@@ -161,6 +133,7 @@ export function VoiceProvider(props: { children: JSX.Element }) {
     lastTranscript,
     isConnected,
     bridge,
+    streamingTranscript,
   }
 
   return <VoiceContext.Provider value={value}>{props.children}</VoiceContext.Provider>

@@ -138,6 +138,23 @@ export function Home() {
     onCleanup(() => b.off("transcriptFinal", handler))
   })
 
+  // Append voice transcript tokens into the input field
+  let lastTranscript: string | null = null
+  createEffect(() => {
+    const text = voice.streamingTranscript()
+    if (text === null) {
+      lastTranscript = null
+      return
+    }
+    if (!prompt) return
+    const delta = lastTranscript === null ? text : text.slice(lastTranscript.length)
+    lastTranscript = text
+    if (delta) {
+      const current = prompt.current.input
+      prompt.set({ input: current + delta, parts: [] })
+    }
+  })
+
   const directory = useDirectory()
 
   const keybind = useKeybind()

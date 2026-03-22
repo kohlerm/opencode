@@ -240,62 +240,21 @@ export function Session() {
   const renderer = useRenderer()
   const voice = useVoice()
 
-  // Wire LLM text deltas to voice TTS when voice mode is enabled
-  sdk.event.on("message.part.delta" as any, (evt: any) => {
-    if (!voice.isEnabled() || !voice.isConnected()) return
-    if (evt.properties.field !== "text") return
-    // Only feed text from the current session
-    const parts = sync.data.part[route.sessionID]
-    if (!parts) return
+  // Update bridge session ID when route changes
+  createEffect(() => {
     const b = voice.bridge()
     if (b) {
-      b.feedLLMText(evt.properties.delta)
+      b.setSessionID(route.sessionID)
     }
   })
 
-  // Flush remaining TTS text when assistant message completes
-  sdk.event.on("message.updated" as any, (evt: any) => {
-    if (!voice.isEnabled() || !voice.isConnected()) return
-    const msg = evt.properties.info
-    if (msg.role !== "assistant") return
-    if (msg.sessionID !== route.sessionID) return
-    if (!msg.time?.completed) return
-    const b = voice.bridge()
-    if (b) {
-      b.flushLLMText()
-    }
-  })
-
-  // Handle voice transcripts — send as prompts to the current session
+  // Auto-submit when voice transcript is finalized (user stops speaking)
   createEffect(() => {
     const b = voice.bridge()
     if (!b) return
 
-    const handler = (text: string, _sessionID: string | null) => {
+    const handler = (text: string) => {
       if (!prompt) return
-
-      const normalized = text
-        .trim()
-        .toLowerCase()
-        .replace(/[.!?]+$/, "")
-      const compact = normalized.replace(/[^a-z]/g, "")
-
-      // Voice abort intent: prefer "escape" to avoid accidental short-command triggers.
-      const isEscapeIntent =
-        normalized === "escape" ||
-        normalized === "esc" ||
-        normalized === "press escape" ||
-        compact === "escape" ||
-        compact === "esc" ||
-        compact === "scape" ||
-        compact === "skape"
-
-      if (isEscapeIntent) {
-        sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
-        toast.show({ message: "Voice escape triggered", variant: "warning", duration: 1500 })
-        return
-      }
-
       prompt.set({ input: text, parts: [] })
       prompt.submit()
     }
@@ -304,24 +263,21 @@ export function Session() {
     onCleanup(() => b.off("transcriptFinal", handler))
   })
 
-  // Handle barge-in — abort the current session
+  // Append voice transcript tokens into the input field
+  let lastTranscript: string | null = null
   createEffect(() => {
-    const b = voice.bridge()
-    if (!b) return
-
-    const handler = () => {
-      sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+    const text = voice.streamingTranscript()
+    if (text === null) {
+      lastTranscript = null
+      return
     }
-
-    b.on("abortSession", handler)
-    onCleanup(() => b.off("abortSession", handler))
-  })
-
-  // Update bridge session ID when route changes
-  createEffect(() => {
-    const b = voice.bridge()
-    if (b) {
-      b.setSessionID(route.sessionID)
+    if (!prompt) return
+    // Only append the new delta since last update
+    const delta = lastTranscript === null ? text : text.slice(lastTranscript.length)
+    lastTranscript = text
+    if (delta) {
+      const current = prompt.current.input
+      prompt.set({ input: current + delta, parts: [] })
     }
   })
 
@@ -1163,17 +1119,10 @@ export function Session() {
                   <Switch>
                     <Match when={message.role === "user"}>
                       <UserMessage
-                        last={index() === messages().length - 1}
-                        onEdit={async (content) => {
-                          const id = await sdk.client.session.editMessage({
-                            sessionID: route.sessionID,
-                            messageID: message.id,
-                            content,
-                          })
-                          navigate({ ...route, sessionID: id })
-                        }}
                         message={message as UserMessage}
                         parts={sync.data.part[message.id] ?? []}
+                        onMouseUp={() => {}}
+                        index={index()}
                         pending={pending()}
                       />
                     </Match>

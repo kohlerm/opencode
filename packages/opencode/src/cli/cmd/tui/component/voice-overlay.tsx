@@ -2,7 +2,7 @@
  * Voice Overlay Component
  *
  * Shows voice mode status in the TUI.
- * Only renders when voice mode is enabled via Ctrl+V.
+ * Only renders when voice mode is enabled via the configured voice toggle keybind.
  */
 
 import { Show, createMemo } from "solid-js"

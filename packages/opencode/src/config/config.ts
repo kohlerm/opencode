@@ -821,7 +821,7 @@ export namespace Config {
       session_share: z.string().optional().default("none").describe("Share current session"),
       session_unshare: z.string().optional().default("none").describe("Unshare current session"),
       session_interrupt: z.string().optional().default("escape").describe("Interrupt current session"),
-      voice_toggle: z.string().optional().default("ctrl+v").describe("Toggle voice mode"),
+      voice_toggle: z.string().optional().default("<leader>v").describe("Toggle voice mode"),
       session_compact: z.string().optional().default("<leader>c").describe("Compact the session"),
       messages_page_up: z.string().optional().default("pageup,ctrl+alt+b").describe("Scroll messages up by one page"),
       messages_page_down: z
@@ -1226,44 +1226,7 @@ export namespace Config {
       voice: z
         .object({
           enabled: z.boolean().default(false),
-          keybind: z.string().default("ctrl+v"),
-          rcliPath: z.string().default("../../rcli/build/rcli"),
-          socketPath: z.string().default("~/.opencode/rcli-voice.sock"),
-          stt: z
-            .object({
-              model: z.enum(["zipformer", "whisper-base", "parakeet-tdt"]).default("zipformer"),
-              language: z.string().default("en"),
-            })
-            .default(() => ({ model: "zipformer" as const, language: "en" })),
-          tts: z
-            .object({
-              model: z.enum(["kokoro-en", "kokoro-multi", "piper-lessac", "piper-amy"]).default("kokoro-en"),
-              voice: z.string().optional(),
-              speed: z.number().default(1.0),
-            })
-            .default(() => ({ model: "kokoro-en" as const, speed: 1.0 })),
-          vad: z
-            .object({
-              threshold: z.number().default(0.5),
-              minSilenceDuration: z.number().default(0.5),
-              minSpeechDuration: z.number().default(0.25),
-            })
-            .default(() => ({ threshold: 0.5, minSilenceDuration: 0.5, minSpeechDuration: 0.25 })),
-          permissions: z
-            .object({
-              voiceConfirm: z.boolean().default(true),
-              autoApprove: z.array(z.string()).default(["read", "glob"]),
-              requireConfirm: z.array(z.string()).default(["write", "edit", "bash"]),
-            })
-            .default(() => ({ voiceConfirm: true, autoApprove: ["read", "glob"], requireConfirm: ["write", "edit", "bash"] })),
-          ui: z
-            .object({
-              overlayPosition: z.enum(["top", "bottom"]).default("bottom"),
-              showWaveform: z.boolean().default(true),
-              showTranscript: z.boolean().default(true),
-              transcriptTimeout: z.number().default(3000),
-            })
-            .default(() => ({ overlayPosition: "bottom" as const, showWaveform: true, showTranscript: true, transcriptTimeout: 3000 })),
+          keybind: z.string().default("<leader>v"),
         })
         .optional(),
     })

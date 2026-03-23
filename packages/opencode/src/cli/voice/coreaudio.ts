@@ -14,6 +14,7 @@
 import { EventEmitter } from "node:events"
 import { createRequire } from "node:module"
 import path from "node:path"
+import { mute } from "./stderr-native"
 
 const req = createRequire(import.meta.url)
 
@@ -60,6 +61,8 @@ export class MicrophoneRecorder extends EventEmitter {
   private running = false
   private poll: ReturnType<typeof setInterval> | null = null
   private opts: Record<string, any>
+  private undo: (() => void) | null = null
+  private gate: ReturnType<typeof setTimeout> | null = null
 
   constructor(opts: Record<string, any> = {}) {
     super()
@@ -71,13 +74,19 @@ export class MicrophoneRecorder extends EventEmitter {
 
   async start() {
     if (this.running) throw new Error("Already running")
-    this.native.startMicrophone({
-      sampleRate: this.opts.sampleRate,
-      chunkDurationMs: this.opts.chunkDurationMs,
-      stereo: this.opts.stereo,
-      deviceId: this.opts.deviceId,
-      gain: this.opts.gain,
-    })
+    this.undo = mute()
+    try {
+      this.native.startMicrophone({
+        sampleRate: this.opts.sampleRate,
+        chunkDurationMs: this.opts.chunkDurationMs,
+        stereo: this.opts.stereo,
+        deviceId: this.opts.deviceId,
+        gain: this.opts.gain,
+      })
+    } catch (err) {
+      this.unmute()
+      throw err
+    }
     this.running = true
     this.poll = setInterval(() => {
       if (!this.running) return
@@ -87,12 +96,15 @@ export class MicrophoneRecorder extends EventEmitter {
             if (evt.data) this.emit("data", { data: evt.data })
             break
           case 1:
+            this.hold()
             this.emit("start")
             break
           case 2:
+            this.unmute()
             this.emit("stop")
             break
           case 3:
+            this.unmute()
             this.emit("error", new Error(evt.message || "Unknown error"))
             break
         }
@@ -101,6 +113,7 @@ export class MicrophoneRecorder extends EventEmitter {
   }
 
   async stop() {
+    this.unmute()
     if (!this.running) return
     if (this.poll) {
       clearInterval(this.poll)
@@ -111,5 +124,23 @@ export class MicrophoneRecorder extends EventEmitter {
     }
     this.native.stop()
     this.running = false
+  }
+
+  private unmute() {
+    if (this.gate) {
+      clearTimeout(this.gate)
+      this.gate = null
+    }
+    if (!this.undo) return
+    this.undo()
+    this.undo = null
+  }
+
+  private hold() {
+    if (this.gate) clearTimeout(this.gate)
+    this.gate = setTimeout(() => {
+      this.gate = null
+      this.unmute()
+    }, 1200)
   }
 }

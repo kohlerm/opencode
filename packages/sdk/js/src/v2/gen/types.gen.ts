@@ -1501,6 +1501,10 @@ export type Config = {
      */
     mcp_timeout?: number
   }
+  voice?: {
+    enabled?: boolean
+    keybind?: string
+  }
 }
 
 export type BadRequestError = {

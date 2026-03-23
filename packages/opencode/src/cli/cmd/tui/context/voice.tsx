@@ -2,7 +2,7 @@
  * Voice Context for TUI
  *
  * SolidJS context for managing voice state in the TUI.
- * The VoiceBridge is only constructed when voice mode is enabled (Ctrl+V).
+ * The VoiceBridge is only constructed when voice mode is enabled.
  * Uses Kyutai MLX streaming STT via streaming_stt_server.py.
  */
 

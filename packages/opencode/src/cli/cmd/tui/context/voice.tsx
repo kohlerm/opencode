@@ -9,9 +9,12 @@
 import { createContext, useContext, createSignal, createEffect, onCleanup } from "solid-js"
 import type { Accessor, Setter, JSX } from "solid-js"
 import { VoiceBridge, type VoiceState } from "../../../voice/bridge.js"
+import { VoiceWyomingBridge } from "../../../voice/wyoming.js"
 import { vlog } from "../../../voice/vlog.js"
+import { useToast } from "@tui/ui/toast"
 
 export type { VoiceState }
+type Bridge = VoiceBridge | VoiceWyomingBridge
 
 export interface VoiceContextValue {
   /** Whether voice mode is enabled */
@@ -29,7 +32,7 @@ export interface VoiceContextValue {
   /** Whether bridge is connected */
   isConnected: Accessor<boolean>
   /** The voice bridge instance (for direct access) */
-  bridge: Accessor<VoiceBridge | null>
+  bridge: Accessor<Bridge | null>
   /** Streaming transcript (partial, in-progress) — null when idle */
   streamingTranscript: Accessor<string | null>
 }
@@ -37,16 +40,17 @@ export interface VoiceContextValue {
 const VoiceContext = createContext<VoiceContextValue>()
 
 export function VoiceProvider(props: { children: JSX.Element }) {
+  const toast = useToast()
   const [isEnabled, setEnabled] = createSignal(false)
   const [state, setState] = createSignal<VoiceState>("idle")
   const [audioLevel, setAudioLevel] = createSignal(0)
   const [isSpeech, setIsSpeech] = createSignal(false)
   const [lastTranscript, setLastTranscript] = createSignal("")
   const [isConnected, setIsConnected] = createSignal(false)
-  const [bridge, setBridge] = createSignal<VoiceBridge | null>(null)
+  const [bridge, setBridge] = createSignal<Bridge | null>(null)
   const [streamingTranscript, setStreamingTranscript] = createSignal<string | null>(null)
 
-  let current: VoiceBridge | null = null
+  let current: Bridge | null = null
   let runs = 0
 
   createEffect(() => {
@@ -67,15 +71,30 @@ export function VoiceProvider(props: { children: JSX.Element }) {
       return
     }
 
-    const sttServer =
-      process.env.OPENCODE_STT_SERVER ?? `${process.env.HOME}/parakeet-mlx/kyutai-mlx/python/streaming_stt_server.py`
-
-    const b = new VoiceBridge({
-      sttServerPath: sttServer,
-      python: process.env.OPENCODE_PYTHON ?? "python3",
-      model: "kyutai/stt-1b-en_fr-mlx",
-      vad: true,
-    })
+    const mode = (process.env.OPENCODE_STT_BACKEND ?? "").toLowerCase()
+    const b =
+      mode === "wyoming"
+        ? new VoiceWyomingBridge({
+            uri: process.env.OPENCODE_WYOMING_URI ?? "tcp://127.0.0.1:10301",
+            language: process.env.OPENCODE_STT_LANGUAGE ?? "en",
+            silenceMs: (() => {
+              const n = Number(process.env.OPENCODE_WYOMING_SILENCE_MS)
+              return Number.isFinite(n) && n > 0 ? n : 1250
+            })(),
+            timeoutMs: (() => {
+              const n = Number(process.env.OPENCODE_WYOMING_TIMEOUT_MS)
+              return Number.isFinite(n) && n > 0 ? n : 15000
+            })(),
+          })
+        : new VoiceBridge({
+            sttServerPath:
+              process.env.OPENCODE_STT_SERVER ??
+              `${process.env.HOME}/parakeet-mlx/kyutai-mlx/python/streaming_stt_server.py`,
+            python: process.env.OPENCODE_PYTHON ?? "python3",
+            // Default model picks candle when vad is on (see VoiceBridge) so Kyutai emits end_of_turn; pure -mlx has no VAD heads.
+            vad: process.env.OPENCODE_STT_VAD === "1",
+          })
+    vlog("VoiceCtx", `backend=${mode === "wyoming" ? "wyoming" : "stdio"}`)
     current = b
     setBridge(b)
 
@@ -111,8 +130,30 @@ export function VoiceProvider(props: { children: JSX.Element }) {
       }
     })
 
+    const onErr = (err: Error) => {
+      vlog("VoiceCtx", `Bridge error: ${err.message}`)
+      toast.show({ variant: "error", message: err.message, duration: 6000 })
+    }
+    b.on("error", onErr)
+
     b.start().catch((err: unknown) => {
-      vlog("VoiceCtx", `Failed to start voice bridge: ${err}`)
+      const msg = err instanceof Error ? err.message : String(err)
+      vlog("VoiceCtx", `Failed to start voice bridge: ${msg}`)
+      toast.show({ variant: "error", message: msg, duration: 8000 })
+      if (current === b) {
+        b.off("error", onErr)
+        b.stop()
+        current = null
+        setBridge(null)
+        setIsConnected(false)
+        setState("idle")
+        setStreamingTranscript(null)
+      }
+      setEnabled(false)
+    })
+
+    onCleanup(() => {
+      b.off("error", onErr)
     })
   })
 

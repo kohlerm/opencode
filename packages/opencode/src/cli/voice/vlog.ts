@@ -5,7 +5,7 @@ import { openSync, writeSync, closeSync, writeFileSync } from "node:fs"
 
 const LOG_PATH = "/tmp/opencode-voice.log"
 
-// Clear log on module load
+// Truncate on load so each process gets a fresh log (see OPENCODE_VOICE_NATIVE_LOGS for native noise).
 try {
   writeFileSync(LOG_PATH, "")
 } catch {}

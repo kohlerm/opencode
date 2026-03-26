@@ -42,7 +42,6 @@ import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { TuiConfigProvider } from "./context/tui-config"
 import { TuiConfig } from "@/config/tui"
 import { VoiceProvider, useVoice } from "./context/voice"
-// VoiceOverlay removed — voice state is shown inline in the Prompt footer
 
 async function getTerminalBackgroundColor(): Promise<"dark" | "light"> {
   // can't set raw mode if not a TTY

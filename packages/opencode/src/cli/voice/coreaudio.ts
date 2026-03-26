@@ -18,6 +18,28 @@ import { mute } from "./stderr-native"
 
 const req = createRequire(import.meta.url)
 
+type NativeEvent =
+  | { type: 0; data?: Buffer }
+  | { type: 1 }
+  | { type: 2 }
+  | { type: 3; message?: string }
+
+type AudioRecorderNative = {
+  startMicrophone(opts: MicRecorderOpts): void
+  stop(): void
+  processEvents(): NativeEvent[]
+}
+
+type CoreaudioAddon = { AudioRecorderNative: new () => AudioRecorderNative }
+
+export type MicRecorderOpts = {
+  sampleRate?: number
+  chunkDurationMs?: number
+  stereo?: boolean
+  deviceId?: number
+  gain?: number
+}
+
 function quiet() {
   if (process.platform !== "darwin") return
   if (process.env.OPENCODE_VOICE_NATIVE_LOGS === "1") return
@@ -28,7 +50,7 @@ function quiet() {
 
 quiet()
 
-function load(): any {
+function load(): CoreaudioAddon {
   const paths = [
     // Next to the binary (compiled build)
     path.join(path.dirname(process.execPath), "coreaudio.node"),
@@ -45,9 +67,9 @@ function load(): any {
   throw new Error("Failed to load coreaudio.node native addon. Voice requires macOS with the native audio module.")
 }
 
-let cached: any
+let cached: CoreaudioAddon | undefined
 
-function addon() {
+function addon(): CoreaudioAddon {
   if (!cached) cached = load()
   return cached
 }
@@ -57,14 +79,14 @@ function addon() {
  * Mirrors the coreaudio-node MicrophoneRecorder API used by bridge.ts.
  */
 export class MicrophoneRecorder extends EventEmitter {
-  private native: any
+  private native: AudioRecorderNative
   private running = false
   private poll: ReturnType<typeof setInterval> | null = null
-  private opts: Record<string, any>
+  private opts: MicRecorderOpts
   private undo: (() => void) | null = null
   private gate: ReturnType<typeof setTimeout> | null = null
 
-  constructor(opts: Record<string, any> = {}) {
+  constructor(opts: MicRecorderOpts = {}) {
     super()
     if (process.platform !== "darwin") throw new Error("coreaudio-node only supports macOS")
     quiet()

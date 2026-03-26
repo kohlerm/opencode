@@ -53,6 +53,9 @@ import { useCommandDialog } from "@tui/component/dialog-command"
 import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
 import { useVoice } from "../../context/voice"
+import type { TranscriptFinalMeta } from "../../../../voice/bridge.js"
+import { vlog } from "../../../../voice/vlog.js"
+import { isVoiceStopCommand, useVoiceStreamingAppend } from "@tui/util/voice-prompt"
 import { Header } from "./header"
 import { parsePatch } from "diff"
 import { useDialog } from "../../ui/dialog"
@@ -253,8 +256,29 @@ export function Session() {
     const b = voice.bridge()
     if (!b) return
 
-    const handler = (text: string) => {
+    const handler = (text: string, _sid: string | null, meta?: TranscriptFinalMeta) => {
       if (!prompt) return
+      const status = sync.data.session_status?.[route.sessionID]
+      if (isVoiceStopCommand(text)) {
+        toast.show({ message: `Heard stop command: "${text.trim()}"`, variant: "info" })
+        if (meta) {
+          vlog(
+            "VoiceStop",
+            `stop command finalizeMs=${meta.finalizeMs}ms reason=${meta.reason} (last STT token → final transcript)`,
+          )
+        }
+      }
+      if (status?.type !== "idle" && isVoiceStopCommand(text)) {
+        prompt.set({ input: "", parts: [] })
+        // Next tick: drop stale input if something async repopulated the field during abort.
+        setTimeout(() => {
+          if (prompt.current.input.trim()) return
+          prompt.set({ input: "", parts: [] })
+        }, 0)
+        sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        toast.show({ message: "Stopped current run", variant: "success" })
+        return
+      }
       prompt.set({ input: text, parts: [] })
       prompt.submit()
     }
@@ -263,23 +287,7 @@ export function Session() {
     onCleanup(() => b.off("transcriptFinal", handler))
   })
 
-  // Append voice transcript tokens into the input field
-  let lastTranscript: string | null = null
-  createEffect(() => {
-    const text = voice.streamingTranscript()
-    if (text === null) {
-      lastTranscript = null
-      return
-    }
-    if (!prompt) return
-    // Only append the new delta since last update
-    const delta = lastTranscript === null ? text : text.slice(lastTranscript.length)
-    lastTranscript = text
-    if (delta) {
-      const current = prompt.current.input
-      prompt.set({ input: current + delta, parts: [] })
-    }
-  })
+  useVoiceStreamingAppend(() => prompt, voice)
 
   // Allow exit when in child session (prompt is hidden)
   const exit = useExit()

@@ -15,10 +15,11 @@ import { Installation } from "@/installation"
 import { useKV } from "../context/kv"
 import { useCommandDialog } from "../component/dialog-command"
 import { useLocal } from "../context/local"
+import { useToast } from "../ui/toast"
 import { useVoice } from "../context/voice"
-
-// TODO: what is the best way to do this?
-let once = false
+import type { TranscriptFinalMeta } from "../../../voice/bridge.js"
+import { vlog } from "../../../voice/vlog.js"
+import { isVoiceStopCommand, useVoiceStreamingAppend } from "@tui/util/voice-prompt"
 
 export function Home() {
   const sync = useSync()
@@ -80,15 +81,17 @@ export function Home() {
   const args = useArgs()
   const local = useLocal()
   const voice = useVoice()
+  const toast = useToast()
   const [pendingVoiceSubmit, setPendingVoiceSubmit] = createSignal<string | null>(null)
+
+  let didApplyInitialPrompt = false
   onMount(() => {
-    if (once) return
+    if (didApplyInitialPrompt) return
+    didApplyInitialPrompt = true
     if (route.initialPrompt) {
       prompt.set(route.initialPrompt)
-      once = true
     } else if (args.prompt) {
       prompt.set({ input: args.prompt, parts: [] })
-      once = true
     }
   })
 
@@ -124,8 +127,18 @@ export function Home() {
     const b = voice.bridge()
     if (!b) return
 
-    const handler = (text: string) => {
+    const handler = (text: string, _sid: string | null, meta?: TranscriptFinalMeta) => {
       if (!prompt) return
+      if (isVoiceStopCommand(text)) {
+        toast.show({ message: `Heard stop command: "${text.trim()}"`, variant: "info" })
+        if (meta) {
+          vlog(
+            "VoiceStop",
+            `stop command finalizeMs=${meta.finalizeMs}ms reason=${meta.reason} (last STT token → final transcript)`,
+          )
+        }
+        return
+      }
       prompt.set({ input: text, parts: [] })
       if (sync.ready && local.model.ready) {
         prompt.submit()
@@ -138,22 +151,7 @@ export function Home() {
     onCleanup(() => b.off("transcriptFinal", handler))
   })
 
-  // Append voice transcript tokens into the input field
-  let lastTranscript: string | null = null
-  createEffect(() => {
-    const text = voice.streamingTranscript()
-    if (text === null) {
-      lastTranscript = null
-      return
-    }
-    if (!prompt) return
-    const delta = lastTranscript === null ? text : text.slice(lastTranscript.length)
-    lastTranscript = text
-    if (delta) {
-      const current = prompt.current.input
-      prompt.set({ input: current + delta, parts: [] })
-    }
-  })
+  useVoiceStreamingAppend(() => prompt, voice)
 
   const directory = useDirectory()
 

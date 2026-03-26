@@ -88,12 +88,6 @@ export function Prompt(props: PromptProps) {
         return "Starting voice..."
       case "listening":
         return "Listening..."
-      case "processing":
-        return "Processing..."
-      case "speaking":
-        return "Speaking..."
-      case "interrupted":
-        return "Interrupted"
       default:
         return "Voice Ready"
     }
@@ -105,12 +99,6 @@ export function Prompt(props: PromptProps) {
         return theme.textMuted
       case "listening":
         return theme.success
-      case "processing":
-        return theme.warning
-      case "speaking":
-        return theme.info
-      case "interrupted":
-        return theme.error
       default:
         return theme.textMuted
     }
@@ -887,6 +875,13 @@ export function Prompt(props: PromptProps) {
               onKeyDown={async (e) => {
                 if (props.disabled) {
                   e.preventDefault()
+                  return
+                }
+                // Voice toggle must run here so leader+v is not swallowed by the textarea before global handlers.
+                if (keybind.match("voice_toggle", e)) {
+                  voice.setEnabled(!voice.isEnabled())
+                  e.preventDefault()
+                  e.stopPropagation()
                   return
                 }
                 // Handle clipboard paste (Ctrl+V) - check for images first on Windows

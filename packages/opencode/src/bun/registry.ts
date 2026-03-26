@@ -37,7 +37,18 @@ export namespace PackageRegistry {
     }
 
     const isRange = /[\s^~*xX<>|=]/.test(cachedVersion)
-    if (isRange) return !semver.satisfies(latestVersion, cachedVersion)
+    if (isRange) {
+      if (!semver.validRange(cachedVersion)) {
+        log.warn("Invalid semver range for cache check, treating as outdated", { pkg, cachedVersion })
+        return true
+      }
+      return !semver.satisfies(latestVersion, cachedVersion)
+    }
+
+    if (!semver.valid(cachedVersion)) {
+      log.warn("Non-semver cached version, treating as outdated", { pkg, cachedVersion })
+      return true
+    }
 
     return semver.lt(cachedVersion, latestVersion)
   }

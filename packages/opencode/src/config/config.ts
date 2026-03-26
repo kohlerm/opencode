@@ -821,7 +821,13 @@ export namespace Config {
       session_share: z.string().optional().default("none").describe("Share current session"),
       session_unshare: z.string().optional().default("none").describe("Unshare current session"),
       session_interrupt: z.string().optional().default("escape").describe("Interrupt current session"),
-      voice_toggle: z.string().optional().default("<leader>v").describe("Toggle voice mode"),
+      voice_toggle: z
+        .string()
+        .optional()
+        .default("<leader>v,ctrl+alt+v")
+        .describe(
+          "Toggle speech-to-text (voice) in the TUI. Default: leader then v (leader is ctrl+x by default), or ctrl+alt+v without leader. The top-level `voice` config block is reserved for future options.",
+        ),
       session_compact: z.string().optional().default("<leader>c").describe("Compact the session"),
       messages_page_up: z.string().optional().default("pageup,ctrl+alt+b").describe("Scroll messages up by one page"),
       messages_page_down: z
@@ -1225,8 +1231,8 @@ export namespace Config {
         .optional(),
       voice: z
         .object({
-          enabled: z.boolean().default(false),
-          keybind: z.string().default("<leader>v"),
+          enabled: z.boolean().default(false).describe("Reserved for future use; enable/disable is toggled in the TUI via keybind voice_toggle"),
+          keybind: z.string().default("<leader>v").describe("Reserved; TUI uses keybind voice_toggle"),
         })
         .optional(),
     })

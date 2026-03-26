@@ -370,6 +370,9 @@ export class VoiceBridge extends EventEmitter {
       if (this.transcript.trim()) {
         vlog("Bridge", `Silence timeout (${this.silenceMs}ms) — submitting`)
         this.submitTranscript("silence")
+      } else {
+        // No text but still reset the server to prevent KV cache overflow during long silence
+        this.sendReset()
       }
     }, this.silenceMs)
   }
